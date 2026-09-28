@@ -4,16 +4,23 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
-    "build": "next build",
+    "build": "rm -rf .next out && next build",
     "start": "next start",
     "lint": "eslint"
   },
   "dependencies": {
-    "next": "16.2.6",
+    "@supabase/supabase-js": "^2.106.2",
+    "leaflet": "^1.9.4",
+    "lucide-react": "^1.17.0",
+    "mapbox-gl": "^3.24.0",
+    "next": "^16.3.6",
     "react": "19.2.4",
-    "react-dom": "19.2.4"
+    "react-dom": "19.2.4",
+    "react-leaflet": "^5.0.0",
+    "resend": "^6.12.4"
   },
   "devDependencies": {
+    "@types/leaflet": "^1.9.21",
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",

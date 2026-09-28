@@ -1,0 +1,7520 @@
+"use client";
+
+import React, { useState, useEffect, useRef } from "react";
+import { useRouter } from "next/navigation";
+import styles from "./page.module.css";
+import { supabase } from "../../utils/supabaseClient";
+import { createClient } from "@supabase/supabase-js";
+import { Sidebar } from "../../components/Sidebar";
+import { Navbar } from "../../components/Navbar";
+import { StatsCard } from "../../components/StatsCard";
+import { MapContainer } from "../../components/MapContainer";
+import { useDashboard, Order, Branch, Product, Staff, TarifaItem } from "../../context/DashboardContext";
+import { 
+  MapPin, 
+  Truck, 
+  CheckCircle, 
+  Battery, 
+  Plus, 
+  Trash2, 
+  UserPlus, 
+  Activity,
+  ShieldAlert,
+  Shield,
+  Building,
+  ClipboardList,
+  Upload,
+  Image as ImageIcon,
+  Edit2,
+  Package,
+  Store,
+  Smartphone,
+  Users,
+  CreditCard,
+  Eye,
+  EyeOff,
+  Lock,
+  ToggleLeft,
+  ToggleRight,
+  ExternalLink,
+  CheckCircle2,
+  AlertCircle
+} from "lucide-react";
+import { OrderRouteMap } from "../../components/OrderRouteMap";
+
+interface RouteDetails {
+  distanceKm: number;
+  coordinates: [number, number][];
+}
+
+const calculateHaversineDistance = (p1: [number, number], p2: [number, number]): number => {
+  const R = 6371; // Earth's radius in km
+  const dLat = (p2[0] - p1[0]) * Math.PI / 180;
+  const dLng = (p2[1] - p1[1]) * Math.PI / 180;
+  const a = 
+    Math.sin(dLat/2) * Math.sin(dLat/2) +
+    Math.cos(p1[0] * Math.PI / 180) * Math.cos(p2[0] * Math.PI / 180) * 
+    Math.sin(dLng/2) * Math.sin(dLng/2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+  return R * c;
+};
+
+const mockRouteCoordinates = (start: [number, number], end: [number, number]): [number, number][] => {
+  const points: [number, number][] = [];
+  const segments = 15;
+  for (let i = 0; i <= segments; i++) {
+    const t = i / segments;
+    points.push([
+      start[0] + (end[0] - start[0]) * t,
+      start[1] + (end[1] - start[1]) * t
+    ]);
+  }
+  return points;
+};
+
+const fetchRouteDetails = async (
+  start: [number, number],
+  end: [number, number],
+  token: string
+): Promise<RouteDetails> => {
+  const startLngLat = `${start[1]},${start[0]}`;
+  const endLngLat = `${end[1]},${end[0]}`;
+  
+  if (token && token.trim().startsWith("pk.")) {
+    try {
+      const url = `https://api.mapbox.com/directions/v5/mapbox/driving/${startLngLat};${endLngLat}?access_token=${token}&geometries=geojson&overview=full`;
+      const res = await fetch(url);
+      if (res.ok) {
+        const data = await res.json();
+        if (data.routes && data.routes[0]) {
+          const route = data.routes[0];
+          const distanceKm = route.distance / 1000;
+          const coordinates = route.geometry.coordinates.map((c: any) => [c[1], c[0]]);
+          return { distanceKm, coordinates };
+        }
+      }
+    } catch (err) {
+      console.warn("Failed to fetch route from Mapbox Directions:", err);
+    }
+  }
+  
+  const distanceKm = calculateHaversineDistance(start, end);
+  const coordinates = mockRouteCoordinates(start, end);
+  return { distanceKm, coordinates };
+};
+
+const calculateShippingCost = (distance: number, tarifas: TarifaItem[]): number => {
+  if (!tarifas || tarifas.length === 0) return 0;
+  
+  const regularRates = tarifas.filter(t => !t.km_extra);
+  const matchingRate = regularRates.find(t => {
+    const min = t.min_km ?? 0;
+    const max = t.max_km ?? Infinity;
+    return distance >= min && distance <= max;
+  });
+  
+  if (matchingRate && matchingRate.precio !== undefined) {
+    return matchingRate.precio;
+  }
+  
+  const extraRate = tarifas.find(t => t.km_extra);
+  const extraPricePerKm = extraRate?.precio_por_km ?? 10;
+  
+  if (regularRates.length > 0) {
+    const sortedRates = [...regularRates].sort((a, b) => (b.max_km ?? 0) - (a.max_km ?? 0));
+    const maxLimitRate = sortedRates[0];
+    const maxLimitKm = maxLimitRate.max_km ?? 0;
+    const basePrice = maxLimitRate.precio ?? 0;
+    
+    if (distance > maxLimitKm) {
+      const extraDistance = distance - maxLimitKm;
+      return basePrice + (extraDistance * extraPricePerKm);
+    }
+  }
+  
+  return distance * extraPricePerKm;
+};
+
+interface WelcomeEmailParams {
+  name: string;
+  email: string;
+  role: string;
+  password?: string;
+  companyName?: string;
+  shift?: string;
+  phone?: string;
+}
+
+const sendWelcomeEmail = async (params: WelcomeEmailParams) => {
+  try {
+    const appUrl = typeof window !== "undefined" ? window.location.origin : "https://reparto.mx";
+    
+    const html = `
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Bienvenido a Reparto</title>
+  <style>
+    body {
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+      background-color: #0b0f19;
+      color: #f3f4f6;
+      margin: 0;
+      padding: 0;
+      -webkit-font-smoothing: antialiased;
+    }
+    .container {
+      max-width: 600px;
+      margin: 40px auto;
+      background: #111827;
+      border: 1px solid #1f2937;
+      border-radius: 12px;
+      overflow: hidden;
+      box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.3);
+    }
+    .header {
+      background: linear-gradient(135deg, #f97316 0%, #ea580c 100%);
+      padding: 30px;
+      text-align: center;
+    }
+    .header h1 {
+      color: #ffffff;
+      margin: 0;
+      font-size: 24px;
+      font-weight: 700;
+      letter-spacing: -0.05em;
+    }
+    .content {
+      padding: 40px 30px;
+    }
+    .welcome-text {
+      font-size: 16px;
+      line-height: 1.6;
+      color: #e5e7eb;
+      margin-bottom: 24px;
+    }
+    .card {
+      background: #1f2937;
+      border: 1px solid #374151;
+      border-radius: 8px;
+      padding: 20px;
+      margin-bottom: 30px;
+    }
+    .card-title {
+      font-size: 13px;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: #9ca3af;
+      margin-top: 0;
+      margin-bottom: 12px;
+      font-weight: 600;
+    }
+    .info-row {
+      display: flex;
+      justify-content: space-between;
+      border-bottom: 1px solid #374151;
+      padding: 8px 0;
+    }
+    .info-row:last-child {
+      border-bottom: none;
+    }
+    .info-label {
+      color: #9ca3af;
+      font-size: 13px;
+    }
+    .info-value {
+      color: #f3f4f6;
+      font-weight: 500;
+      font-size: 13px;
+    }
+    .credentials {
+      background: rgba(249, 115, 22, 0.06);
+      border: 1px dashed rgba(249, 115, 22, 0.25);
+      border-radius: 8px;
+      padding: 16px;
+      margin-bottom: 30px;
+    }
+    .credential-row {
+      margin-bottom: 8px;
+    }
+    .credential-row:last-child {
+      margin-bottom: 0;
+    }
+    .credential-label {
+      color: #f97316;
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+    }
+    .credential-value {
+      font-family: monospace;
+      font-size: 14px;
+      color: #ffffff;
+      background: #0b0f19;
+      padding: 4px 8px;
+      border-radius: 4px;
+      display: inline-block;
+      margin-top: 4px;
+    }
+    .btn-container {
+      text-align: center;
+      margin-top: 30px;
+    }
+    .btn {
+      background-color: #f97316;
+      color: #ffffff !important;
+      text-decoration: none;
+      padding: 12px 30px;
+      border-radius: 6px;
+      font-weight: 600;
+      font-size: 15px;
+      display: inline-block;
+    }
+    .footer {
+      background: #0b0f19;
+      padding: 20px;
+      text-align: center;
+      border-top: 1px solid #1f2937;
+      font-size: 11px;
+      color: #6b7280;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <h1>Tortas Purísima - Reparto</h1>
+    </div>
+    <div class="content">
+      <div class="welcome-text">
+        Hola <strong>${params.name}</strong>,<br><br>
+        Te damos la bienvenida al equipo. Has sido dado de alta exitosamente en la plataforma de control de reparto de Tortas Purísima.
+      </div>
+      <div class="card">
+        <h3 class="card-title">Detalles del Perfil</h3>
+        <div class="info-row">
+          <span class="info-label">Rol Asignado:</span>
+          <span class="info-value">${params.role}</span>
+        </div>
+        ${params.companyName ? `
+        <div class="info-row">
+          <span class="info-label">Empresa:</span>
+          <span class="info-value">${params.companyName}</span>
+        </div>
+        ` : ''}
+        ${params.shift ? `
+        <div class="info-row">
+          <span class="info-label">Turno:</span>
+          <span class="info-value">${params.shift}</span>
+        </div>
+        ` : ''}
+        ${params.phone ? `
+        <div class="info-row">
+          <span class="info-label">Teléfono:</span>
+          <span class="info-value">${params.phone}</span>
+        </div>
+        ` : ''}
+      </div>
+      
+      ${params.password ? `
+      <div class="credentials">
+        <h3 class="card-title" style="color: #f97316; margin-bottom: 12px; font-size: 13px;">Credenciales de Acceso</h3>
+        <div class="credential-row">
+          <div class="credential-label">Correo Electrónico</div>
+          <div class="credential-value">${params.email}</div>
+        </div>
+        <div class="credential-row" style="margin-top: 12px;">
+          <div class="credential-label">Contraseña Temporal</div>
+          <div class="credential-value">${params.password}</div>
+        </div>
+      </div>
+
+      <p style="font-size: 12px; color: #9ca3af; line-height: 1.5; margin-bottom: 24px;">
+        * Por razones de seguridad, te sugerimos cambiar tu contraseña una vez que ingreses al sistema por primera vez.
+      </p>
+      ` : ''}
+
+      <div class="btn-container">
+        <a href="${appUrl}" class="btn" style="color: #ffffff;">Acceder al Panel</a>
+      </div>
+    </div>
+    <div class="footer">
+      &copy; ${new Date().getFullYear()} Tortas Purísima. Todos los derechos reservados.
+    </div>
+  </div>
+</body>
+</html>
+    `;
+
+    const res = await fetch("/api/send-email", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        to: params.email,
+        subject: params.role === "SuperAdmin" || params.role === "Super Administrador" 
+          ? "¡Bienvenido! Has sido registrado como Super Administrador"
+          : "¡Bienvenido al equipo! Has sido registrado en Tortas Purísima",
+        html,
+      }),
+    });
+
+    if (!res.ok) {
+      const errorData = await res.json();
+      console.error("Failed to send welcome email:", errorData.error);
+    } else {
+      console.log("Welcome email sent successfully to:", params.email);
+    }
+  } catch (err) {
+    console.error("Error sending welcome email request:", err);
+  }
+};
+
+export default function Dashboard() {
+  const router = useRouter();
+  const [authorized, setAuthorized] = useState(false);
+  const [activeTab, setActiveTab] = useState("overview");
+
+  // State Context
+  const { 
+    drivers, 
+    deliveries, 
+    personnel, 
+    settings, 
+    setMapboxToken, 
+    addDelivery, 
+    assignDelivery, 
+    addDriver, 
+    removeDriver, 
+    toggleDriverStatus, 
+    triggerDriverIncident, 
+    addPersonnel, 
+    removePersonnel,
+    updatePersonnel,
+    products,
+    branches,
+    orders,
+    addOrder,
+    updateOrderStatus,
+    updateOrderDriver,
+    removeOrder,
+    addProduct,
+    removeProduct,
+    updateProduct,
+    addBranch,
+    updateBranch,
+    removeBranch,
+    currentCompanyId
+  } = useDashboard();
+
+  // Selected Order for map highlighting
+  const [selectedOrderId, setSelectedOrderId] = useState<string | null>(null);
+  const [orderFilter, setOrderFilter] = useState<"all" | "pending" | "transit" | "delivered">("all");
+
+  // Form states
+  const [newOrderCustomer, setNewOrderCustomer] = useState("");
+  const [newOrderAddress, setNewOrderAddress] = useState("");
+  const [newOrderItems, setNewOrderItems] = useState("");
+  const [newOrderZone, setNewOrderZone] = useState("Roma");
+
+  const [newDriverName, setNewDriverName] = useState("");
+  const [newDriverPhone, setNewDriverPhone] = useState("");
+  const [newDriverVehicle, setNewDriverVehicle] = useState<"Motocicleta" | "Bicicleta" | "Automóvil" | "Van">("Motocicleta");
+  const [newDriverModel, setNewDriverModel] = useState("");
+  const [newDriverPlates, setNewDriverPlates] = useState("");
+  const [newDriverBranches, setNewDriverBranches] = useState<string[]>([]);
+  const [newDriverPhotos, setNewDriverPhotos] = useState<string[]>([]);
+  const [newDriverPhotoFiles, setNewDriverPhotoFiles] = useState<File[]>([]);
+  const [uploadingPhotos, setUploadingPhotos] = useState(false);
+  const [selectedPreviewPhoto, setSelectedPreviewPhoto] = useState<string | null>(null);
+
+  // New Orders form states
+  const [orderCustomerName, setOrderCustomerName] = useState("");
+  const [orderAddress, setOrderAddress] = useState("");
+  const [orderPhone, setOrderPhone] = useState("");
+  const [orderBranchId, setOrderBranchId] = useState("");
+  const [orderZone, setOrderZone] = useState("Roma");
+  const [orderSelectedProducts, setOrderSelectedProducts] = useState<{ id: string; name: string; quantity: number; price: number }[]>([]);
+  const [selectedProductId, setSelectedProductId] = useState("");
+  const [selectedProductQty, setSelectedProductQty] = useState(1);
+  const [orderTipoEntrega, setOrderTipoEntrega] = useState<'a_domicilio' | 'para_llevar' | 'para_comer_aqui'>("a_domicilio");
+  const [orderRepartidorId, setOrderRepartidorId] = useState("");
+  const addressSelectedFromListRef = useRef(false);
+  const newBranchAddressSelectedFromListRef = useRef(false);
+  const editBranchAddressSelectedFromListRef = useRef(false);
+  const [ordersSubTab, setOrdersSubTab] = useState<"pos" | "monitor">("pos");
+  const [posSubTab, setPosSubTab] = useState<"menu" | "checkout">("menu");
+  const [productSearchQuery, setProductSearchQuery] = useState("");
+  const [selectedProductCategory, setSelectedProductCategory] = useState("Todos");
+
+  const [newStaffName, setNewStaffName] = useState("");
+  const [newStaffEmail, setNewStaffEmail] = useState("");
+  const [newStaffRole, setNewStaffRole] = useState<string>("Dispatcher");
+  const [newStaffShift, setNewStaffShift] = useState<"Matutino" | "Vespertino" | "Nocturno">("Matutino");
+  const [newStaffPassword, setNewStaffPassword] = useState("");
+  const [newStaffPhone, setNewStaffPhone] = useState("");
+  const [newStaffCompanyId, setNewStaffCompanyId] = useState("");
+  const [newStaffPhoto, setNewStaffPhoto] = useState("");
+  const [newStaffPhotoFile, setNewStaffPhotoFile] = useState<File | null>(null);
+
+  const [staffError, setStaffError] = useState("");
+  const [staffMessage, setStaffMessage] = useState("");
+  const [staffIsLoading, setStaffIsLoading] = useState(false);
+  const [newStaffBranches, setNewStaffBranches] = useState<string[]>([]);
+  const [newStaffVehicle, setNewStaffVehicle] = useState<"Motocicleta" | "Bicicleta" | "Automóvil" | "Van">("Motocicleta");
+  const [newStaffVehicleModel, setNewStaffVehicleModel] = useState("");
+  const [newStaffVehiclePlates, setNewStaffVehiclePlates] = useState("");
+  const [newStaffVehiclePhotoFiles, setNewStaffVehiclePhotoFiles] = useState<File[]>([]);
+  const [newStaffVehiclePhotoPreviews, setNewStaffVehiclePhotoPreviews] = useState<string[]>([]);
+  const [staffUploadingVehiclePhotos, setStaffUploadingVehiclePhotos] = useState(false);
+
+  // SuperAdmin screen fields
+  const [newSaName, setNewSaName] = useState("");
+  const [newSaEmail, setNewSaEmail] = useState("");
+  const [newSaPassword, setNewSaPassword] = useState("");
+  const [newSaPhone, setNewSaPhone] = useState("");
+  const [newSaPhoto, setNewSaPhoto] = useState("");
+  const [newSaPhotoFile, setNewSaPhotoFile] = useState<File | null>(null);
+  const [saError, setSaError] = useState("");
+  const [saMessage, setSaMessage] = useState("");
+  const [saIsLoading, setSaIsLoading] = useState(false);
+  const [superAdmins, setSuperAdmins] = useState<Staff[]>([]);
+
+  // Broker creation states
+  const [newBrokerName, setNewBrokerName] = useState("");
+  const [newBrokerEmail, setNewBrokerEmail] = useState("");
+  const [newBrokerPhone, setNewBrokerPhone] = useState("");
+  const [newBrokerPassword, setNewBrokerPassword] = useState("");
+  const [newBrokerCompanies, setNewBrokerCompanies] = useState<string[]>([]);
+  const [brokerIsLoading, setBrokerIsLoading] = useState(false);
+  const [brokerError, setBrokerError] = useState("");
+  const [brokerMessage, setBrokerMessage] = useState("");
+  const [brokersList, setBrokersList] = useState<any[]>([]);
+
+
+  // Staff edit modal states
+  const [editingStaff, setEditingStaff] = useState<Staff | null>(null);
+
+  // Mapbox Autocomplete suggestions states
+  const [orderLat, setOrderLat] = useState<number | null>(null);
+  const [orderLng, setOrderLng] = useState<number | null>(null);
+  const [orderShippingCost, setOrderShippingCost] = useState<number>(0);
+  const [routeDistance, setRouteDistance] = useState<number | null>(null);
+  const [routeCoordinates, setRouteCoordinates] = useState<[number, number][]>([]);
+  const [isCalculatingRoute, setIsCalculatingRoute] = useState(false);
+  const [addressSuggestions, setAddressSuggestions] = useState<{ place_name: string; center: [number, number] }[]>([]);
+  const [showSuggestions, setShowSuggestions] = useState(false);
+  const [isLoadingSuggestions, setIsLoadingSuggestions] = useState(false);
+
+  const calculatedOrderTotal = orderSelectedProducts.reduce((sum, p) => sum + (p.price * p.quantity), 0);
+  const finalOrderTotal = calculatedOrderTotal + (orderTipoEntrega === "a_domicilio" ? orderShippingCost : 0);
+
+  // Mapbox Autocomplete suggestions states (Branches)
+  const [newBranchLat, setNewBranchLat] = useState<number | null>(null);
+  const [newBranchLng, setNewBranchLng] = useState<number | null>(null);
+  const [newBranchSuggestions, setNewBranchSuggestions] = useState<{ place_name: string; center: [number, number] }[]>([]);
+  const [showNewBranchSuggestions, setShowNewBranchSuggestions] = useState(false);
+  const [isLoadingNewBranchSuggestions, setIsLoadingNewBranchSuggestions] = useState(false);
+
+  const [editBranchLat, setEditBranchLat] = useState<number | null>(null);
+  const [editBranchLng, setEditBranchLng] = useState<number | null>(null);
+  const [editBranchSuggestions, setEditBranchSuggestions] = useState<{ place_name: string; center: [number, number] }[]>([]);
+  const [showEditBranchSuggestions, setShowEditBranchSuggestions] = useState(false);
+  const [isLoadingEditBranchSuggestions, setIsLoadingEditBranchSuggestions] = useState(false);
+  const [editStaffName, setEditStaffName] = useState("");
+  const [editStaffEmail, setEditStaffEmail] = useState("");
+  const [editStaffPhone, setEditStaffPhone] = useState("");
+  const [editStaffRole, setEditStaffRole] = useState("Dispatcher");
+  const [editStaffShift, setEditStaffShift] = useState<"Matutino" | "Vespertino" | "Nocturno">("Matutino");
+  const [editStaffBranches, setEditStaffBranches] = useState<string[]>([]);
+  const [editStaffStatus, setEditStaffStatus] = useState<"active" | "inactive">("active");
+  const [editStaffVehicle, setEditStaffVehicle] = useState<"Motocicleta" | "Bicicleta" | "Automóvil" | "Van">("Motocicleta");
+  const [editStaffVehicleModel, setEditStaffVehicleModel] = useState("");
+  const [editStaffVehiclePlates, setEditStaffVehiclePlates] = useState("");
+
+  const [newProductName, setNewProductName] = useState("");
+  const [newProductPrice, setNewProductPrice] = useState("");
+  const [newProductDesc, setNewProductDesc] = useState("");
+  const [newProductCategory, setNewProductCategory] = useState("Comida");
+  const [editingProduct, setEditingProduct] = useState<Product | null>(null);
+  const [newProductBranches, setNewProductBranches] = useState<string[]>([]);
+  const [hasInitializedBranches, setHasInitializedBranches] = useState(false);
+  const [newProductPhotoFiles, setNewProductPhotoFiles] = useState<File[]>([]);
+  const [newProductPhotoPreviews, setNewProductPhotoPreviews] = useState<string[]>([]);
+  const [productUploadingPhotos, setProductUploadingPhotos] = useState(false);
+
+  const [newBranchName, setNewBranchName] = useState("");
+  const [newBranchAddress, setNewBranchAddress] = useState("");
+  const [newBranchMapLink, setNewBranchMapLink] = useState("");
+  const [newBranchPhone, setNewBranchPhone] = useState("");
+  const [newBranchPhones, setNewBranchPhones] = useState<string[]>([""]);
+  const [newBranchPhotoFiles, setNewBranchPhotoFiles] = useState<File[]>([]);
+  const [newBranchPhotoPreviews, setNewBranchPhotoPreviews] = useState<string[]>([]);
+  const [selectedBranchDetail, setSelectedBranchDetail] = useState<Branch | null>(null);
+  const [zoomedImage, setZoomedImage] = useState<string | null>(null);
+  const [branchUploadingPhotos, setBranchUploadingPhotos] = useState(false);
+
+  // Branch rates configuration state (Creation)
+  const [newBranchRates, setNewBranchRates] = useState<TarifaItem[]>([
+    { min_km: 0, max_km: 3, precio: 40 }
+  ]);
+  const [newBranchExtraKmPrice, setNewBranchExtraKmPrice] = useState<string>("10");
+
+  // Branch editing state (in Details Modal)
+  const [isEditingBranch, setIsEditingBranch] = useState(false);
+  const [editBranchName, setEditBranchName] = useState("");
+  const [editBranchAddress, setEditBranchAddress] = useState("");
+  const [editBranchMapLink, setEditBranchMapLink] = useState("");
+  const [editBranchPhones, setEditBranchPhones] = useState<string[]>([""]);
+  const [editBranchRates, setEditBranchRates] = useState<TarifaItem[]>([]);
+  const [editBranchExtraKmPrice, setEditBranchExtraKmPrice] = useState("");
+  const [editBranchStatus, setEditBranchStatus] = useState<"active" | "inactive">("active");
+
+  const [localMapboxToken, setLocalMapboxToken] = useState(settings.mapboxToken);
+
+  // Platform visits state
+  const [platformVisits, setPlatformVisits] = useState<number>(0);
+  
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      const savedVisits = localStorage.getItem("reparto_platform_visits");
+      const currentVisits = savedVisits ? parseInt(savedVisits, 10) : 1248;
+      // Increment visits on mount
+      const newVisits = currentVisits + 1;
+      localStorage.setItem("reparto_platform_visits", newVisits.toString());
+      setPlatformVisits(newVisits);
+    }
+  }, []);
+
+  // Admin and SuperAdmin states
+  const [isAdmin, setIsAdmin] = useState(true);
+  const [isSuperAdmin, setIsSuperAdmin] = useState(false);
+  const [userRole, setUserRole] = useState("Administrador");
+  const [superAdminCompanies, setSuperAdminCompanies] = useState<any[]>([]);
+  
+  // Special Create Company Screen fields
+  const [newCompId, setNewCompId] = useState("");
+  const [newCompName, setNewCompName] = useState("");
+  const [newCompOwner, setNewCompOwner] = useState("");
+  const [newCompEmail, setNewCompEmail] = useState("");
+  const [newCompPassword, setNewCompPassword] = useState("");
+  const [newCompUrl, setNewCompUrl] = useState("");
+  const [newCompLogoPreview, setNewCompLogoPreview] = useState("");
+  const [newCompLogoFile, setNewCompLogoFile] = useState<File | null>(null);
+  const [newCompPhones, setNewCompPhones] = useState<string[]>([""]);
+  const [newCompDesc, setNewCompDesc] = useState("");
+  const [newCompAddress, setNewCompAddress] = useState("");
+  const [compIsLoading, setCompIsLoading] = useState(false);
+  const [compError, setCompError] = useState("");
+  const [compMessage, setCompMessage] = useState("");
+  const [editingCompany, setEditingCompany] = useState<any | null>(null);
+
+  // Payment Gateway Configuration States
+  const [payMpPublicKeyTest, setPayMpPublicKeyTest] = useState("");
+  const [payMpAccessTokenTest, setPayMpAccessTokenTest] = useState("");
+  const [payMpPublicKeyProd, setPayMpPublicKeyProd] = useState("");
+  const [payMpAccessTokenProd, setPayMpAccessTokenProd] = useState("");
+  const [payClipApiKeyTest, setPayClipApiKeyTest] = useState("");
+  const [payClipApiKeyProd, setPayClipApiKeyProd] = useState("");
+  const [paymentMode, setPaymentMode] = useState<"test" | "production">("test");
+  const [payIsLoading, setPayIsLoading] = useState(false);
+  const [payError, setPayError] = useState("");
+  const [payMessage, setPayMessage] = useState("");
+  const [payShowMpPublicKeyTest, setPayShowMpPublicKeyTest] = useState(false);
+  const [payShowMpAccessTokenTest, setPayShowMpAccessTokenTest] = useState(false);
+  const [payShowMpPublicKeyProd, setPayShowMpPublicKeyProd] = useState(false);
+  const [payShowMpAccessTokenProd, setPayShowMpAccessTokenProd] = useState(false);
+  const [payShowClipApiKeyTest, setPayShowClipApiKeyTest] = useState(false);
+  const [payShowClipApiKeyProd, setPayShowClipApiKeyProd] = useState(false);
+  const [payConfigLoaded, setPayConfigLoaded] = useState(false);
+
+  // CDMX Predefined coordinates zones for simple ordering
+  const ZONES_COORDS: { [key: string]: [number, number] } = {
+    Roma: [19.4172, -99.1601],
+    Condesa: [19.4124, -99.1704],
+    Polanco: [19.4326, -99.2001],
+    Centro: [19.4326, -99.1332],
+    Juárez: [19.4270, -99.1620]
+  };
+
+  // Fetch companies for SuperAdmin select list
+  const fetchSaCompanies = async () => {
+    let dbCompanies: any[] = [];
+    try {
+      const { data, error } = await supabase
+        .from("Empresa")
+        .select("*");
+      if (!error && data) {
+        dbCompanies = data.map(item => ({
+          ...item,
+          Nombre_Empresa: item.NombreEmpresa || item.Nombre_Empresa || "",
+          foto_empresa: item.logoEmpresa || item.foto_empresa || "",
+          NombreEmpresa: item.NombreEmpresa || item.Nombre_Empresa || "",
+          logoEmpresa: item.logoEmpresa || item.foto_empresa || "",
+          PropietarioEmpresa: item.PropietarioEmpresa || item.PropietarioEmpres || "",
+          TelefonosEmpresa: item.TelefonosEmpresa || []
+        }));
+      }
+    } catch (err) {
+      console.warn("Offline or missing Empresa table:", err);
+    }
+
+    try {
+      const localCompanies = JSON.parse(localStorage.getItem("reparto_local_companies") || "[]");
+      const mockFallback = [
+        { 
+          idEmpresa: "emp-mock-1", 
+          NombreEmpresa: "Reparto Express Local", 
+          Nombre_Empresa: "Reparto Express Local",
+          logoEmpresa: "https://images.unsplash.com/photo-1526367790999-015078648c7e?w=120&auto=format&fit=crop",
+          foto_empresa: "https://images.unsplash.com/photo-1526367790999-015078648c7e?w=120&auto=format&fit=crop",
+          PropietarioEmpresa: "Juan Gabriel",
+          mailEmpresa: "contacto@expresslocal.com",
+          urlEmpresaUnico: "reparto-express-local",
+          TelefonosEmpresa: ["5512345678", "5587654321"]
+        },
+        { 
+          idEmpresa: "emp-mock-2", 
+          NombreEmpresa: "Fast Food CDMX Delivery", 
+          Nombre_Empresa: "Fast Food CDMX Delivery",
+          logoEmpresa: "https://images.unsplash.com/photo-1513104890138-7c749659a591?w=120&auto=format&fit=crop",
+          foto_empresa: "https://images.unsplash.com/photo-1513104890138-7c749659a591?w=120&auto=format&fit=crop",
+          PropietarioEmpresa: "Sofía Ruiz",
+          mailEmpresa: "info@fastfoodcdmx.com",
+          urlEmpresaUnico: "fast-food-cdmx",
+          TelefonosEmpresa: ["5599887766"]
+        },
+        { 
+          idEmpresa: "emp-mock-3", 
+          NombreEmpresa: "Logística Nacional S.A.", 
+          Nombre_Empresa: "Logística Nacional S.A.",
+          logoEmpresa: "https://images.unsplash.com/photo-1586528116311-ad8dd3c8310d?w=120&auto=format&fit=crop",
+          foto_empresa: "https://images.unsplash.com/photo-1586528116311-ad8dd3c8310d?w=120&auto=format&fit=crop",
+          PropietarioEmpresa: "Carlos Slim",
+          mailEmpresa: "corp@logistica.com",
+          urlEmpresaUnico: "logistica-nacional",
+          TelefonosEmpresa: ["5544332211", "5511223344", "5599008877"]
+        }
+      ];
+      const normalizedLocal = localCompanies.map((item: any) => ({
+        ...item,
+        Nombre_Empresa: item.NombreEmpresa || item.Nombre_Empresa || "",
+        foto_empresa: item.logoEmpresa || item.foto_empresa || "",
+        NombreEmpresa: item.NombreEmpresa || item.Nombre_Empresa || "",
+        logoEmpresa: item.logoEmpresa || item.foto_empresa || "",
+        PropietarioEmpresa: item.PropietarioEmpresa || item.PropietarioEmpres || "",
+        TelefonosEmpresa: item.TelefonosEmpresa || []
+      }));
+      const merged: any[] = [];
+      const seenIds = new Set<string>();
+      dbCompanies.forEach((c: any) => {
+        if (c.idEmpresa && !seenIds.has(c.idEmpresa)) {
+          seenIds.add(c.idEmpresa);
+          merged.push(c);
+        }
+      });
+      normalizedLocal.forEach((c: any) => {
+        if (c.idEmpresa && !seenIds.has(c.idEmpresa)) {
+          seenIds.add(c.idEmpresa);
+          merged.push(c);
+        }
+      });
+      const finalCompanies = merged.length > 0 ? merged : mockFallback;
+      setSuperAdminCompanies(finalCompanies);
+    } catch {
+      console.error("Error loading fallback companies");
+    }
+  };
+
+  // Fetch SuperAdmins from users table where superAdmin = true
+  const fetchSuperAdmins = async () => {
+    let dbSa: any[] = [];
+    try {
+      const { data, error } = await supabase
+        .from("users")
+        .select("*")
+        .eq("superAdmin", true);
+      if (!error && data) {
+        dbSa = data;
+      } else if (error) {
+        console.warn("Error fetching superAdmins from DB:", error.message);
+      }
+    } catch (err) {
+      console.warn("Offline or failed to fetch superAdmins:", err);
+    }
+
+    try {
+      // Merge with local storage fallback if any local users are superAdmin
+      const localUsers = JSON.parse(localStorage.getItem("reparto_local_users") || "[]");
+      const localSa = localUsers.filter((u: any) => u.superAdmin === true || u.superAdmin === "true" || u.superAdmin === 1 || u.superAdmin === "1");
+      
+      const merged: any[] = [];
+      const seenIds = new Set<string>();
+      
+      dbSa.forEach((u: any) => {
+        if (u.IDUser && !seenIds.has(u.IDUser)) {
+          seenIds.add(u.IDUser);
+          merged.push(u);
+        }
+      });
+      
+      localSa.forEach((u: any) => {
+        if (u.IDUser && !seenIds.has(u.IDUser)) {
+          seenIds.add(u.IDUser);
+          merged.push(u);
+        }
+      });
+      
+      const mappedSa: Staff[] = merged.map((u: any) => ({
+        id: u.IDUser,
+        name: u.name || "",
+        email: u.mail || "",
+        role: u.Rol || "Administrador",
+        status: u.status || "active",
+        phone: u.phone || "",
+        foto: u.foto || null,
+        sucursales: []
+      }));
+      
+      setSuperAdmins(mappedSa);
+    } catch (err) {
+      console.error("Error setting superAdmins:", err);
+    }
+  };
+
+  // Trigger loading companies when personnel or create-company tab is active
+  useEffect(() => {
+    if (activeTab === "personnel" || activeTab === "create-company") {
+      const timer = setTimeout(() => {
+        fetchSaCompanies();
+      }, 0);
+      return () => clearTimeout(timer);
+    }
+  }, [activeTab]);
+
+  // Trigger loading superAdmins when super-admins tab is active
+  useEffect(() => {
+    if (activeTab === "super-admins" && isSuperAdmin) {
+      const timer = setTimeout(() => {
+        fetchSuperAdmins();
+      }, 0);
+      return () => clearTimeout(timer);
+    }
+  }, [activeTab, isSuperAdmin]);
+
+  // Sync currentCompanyId to staff registration company select
+  useEffect(() => {
+    if (currentCompanyId) {
+      const timer = setTimeout(() => {
+        setNewStaffCompanyId(currentCompanyId);
+      }, 0);
+      return () => clearTimeout(timer);
+    }
+  }, [currentCompanyId]);
+
+  // By default, select all branches when creating a new product
+  useEffect(() => {
+    if (branches.length > 0 && !editingProduct && newProductBranches.length === 0 && !hasInitializedBranches) {
+      setNewProductBranches(branches.map(b => b.id));
+      setHasInitializedBranches(true);
+    }
+  }, [branches, editingProduct, hasInitializedBranches, newProductBranches]);
+
+  // Auth protection check & Load superAdmin/admin profile details
+  useEffect(() => {
+    const checkAuthAndProfile = async () => {
+      const isLoggedIn = localStorage.getItem("reparto_logged_in");
+      if (isLoggedIn !== "true") {
+        router.push("/");
+        return;
+      }
+
+      // Load from localStorage first as instant fallback
+      const profile = localStorage.getItem("reparto_user_profile");
+      let isLocalUser = false;
+      let parsedProfile: any = null;
+
+      if (profile) {
+        try {
+          parsedProfile = JSON.parse(profile);
+          if (parsedProfile.authProvider === "local") {
+            isLocalUser = true;
+          }
+          const isSuper = parsedProfile.superAdmin === true || parsedProfile.superAdmin === "true" || parsedProfile.superAdmin === 1 || parsedProfile.superAdmin === "1";
+          setIsSuperAdmin(isSuper);
+          const isAdm = parsedProfile.isAdmin !== false && parsedProfile.isAdmin !== "false" && parsedProfile.isAdmin !== 0 && parsedProfile.isAdmin !== "0";
+          setIsAdmin(isAdm);
+          if (parsedProfile.role) {
+            setUserRole(parsedProfile.role);
+          }
+        } catch {
+          console.error("Error reading profile details from local storage");
+        }
+      }
+
+      if (isLocalUser) {
+        setAuthorized(true);
+        return;
+      }
+
+      // Fetch fresh value from database to prevent stale state issues and confirm session
+      try {
+        const { data: { user } } = await supabase.auth.getUser();
+        if (user) {
+          setAuthorized(true);
+          
+          const { data: dbUser, error: dbErr } = await supabase
+            .from("users")
+            .select("superAdmin, isAdmin, Rol")
+            .eq("IDUser", user.id)
+            .maybeSingle();
+
+          if (dbUser && !dbErr) {
+            const isSuper = dbUser.superAdmin === true || dbUser.superAdmin === "true" || dbUser.superAdmin === 1 || dbUser.superAdmin === "1";
+            setIsSuperAdmin(isSuper);
+            const isAdm = dbUser.isAdmin !== false && dbUser.isAdmin !== "false" && dbUser.isAdmin !== 0 && dbUser.isAdmin !== "0";
+            setIsAdmin(isAdm);
+            if (dbUser.Rol) {
+              setUserRole(dbUser.Rol);
+            }
+            
+            // Sync back to local storage if changed
+            if (parsedProfile) {
+              let changed = false;
+              if (parsedProfile.superAdmin !== isSuper) {
+                parsedProfile.superAdmin = isSuper;
+                changed = true;
+              }
+              if (parsedProfile.isAdmin !== isAdm) {
+                parsedProfile.isAdmin = isAdm;
+                changed = true;
+              }
+              if (dbUser.Rol && parsedProfile.role !== dbUser.Rol) {
+                parsedProfile.role = dbUser.Rol;
+                changed = true;
+              }
+              if (changed) {
+                localStorage.setItem("reparto_user_profile", JSON.stringify(parsedProfile));
+              }
+            }
+          }
+        } else {
+          // If we had a local profile, allow staying logged in as a fallback
+          if (parsedProfile) {
+            console.warn("No active Supabase session, but profile exists. Keeping user logged in.");
+            setAuthorized(true);
+          } else {
+            console.warn("No active Supabase session, redirecting to login.");
+            localStorage.removeItem("reparto_logged_in");
+            localStorage.removeItem("reparto_user_profile");
+            router.push("/");
+          }
+        }
+      } catch (err) {
+        console.warn("Could not fetch fresh user profile from database:", err);
+        // If we have a local fallback profile, still authorize the user
+        if (parsedProfile) {
+          setAuthorized(true);
+        } else {
+          localStorage.removeItem("reparto_logged_in");
+          localStorage.removeItem("reparto_user_profile");
+          router.push("/");
+        }
+      }
+    };
+
+    checkAuthAndProfile();
+  }, [router]);
+
+  // Redirect non-admins if they try to access restricted tabs
+  useEffect(() => {
+    const isRepartidor = !isAdmin || userRole === "Repartidor";
+    const restrictedTabs = ["orders", "drivers", "personnel", "products", "branches", "payment-config", "create-company", "super-admins"];
+    if (isRepartidor && restrictedTabs.includes(activeTab)) {
+      setActiveTab("overview");
+    }
+    // Redirect non-superadmins if they try to access superadmin restricted tabs
+    if (!isSuperAdmin && (activeTab === "super-admins" || activeTab === "create-company")) {
+      setActiveTab("overview");
+    }
+  }, [activeTab, isAdmin, userRole, isSuperAdmin]);
+
+  useEffect(() => {
+    setTimeout(() => {
+      setLocalMapboxToken(settings.mapboxToken);
+    }, 0);
+  }, [settings.mapboxToken]);
+
+  // Calculate Shipping Cost and Route when branch and destination are set
+  useEffect(() => {
+    const isDelivery = orderTipoEntrega === "a_domicilio";
+    if (!isDelivery || !orderBranchId || orderLat === null || orderLng === null) {
+      setOrderShippingCost(0);
+      setRouteDistance(null);
+      setRouteCoordinates([]);
+      return;
+    }
+
+    const branch = branches.find(b => b.id === orderBranchId);
+    if (!branch || branch.lat === undefined || branch.lat === null || branch.lng === undefined || branch.lng === null) {
+      setOrderShippingCost(0);
+      setRouteDistance(null);
+      setRouteCoordinates([]);
+      return;
+    }
+
+    const start: [number, number] = [branch.lat, branch.lng];
+    const end: [number, number] = [orderLat, orderLng];
+
+    const getRoute = async () => {
+      setIsCalculatingRoute(true);
+      try {
+        const details = await fetchRouteDetails(start, end, settings.mapboxToken);
+        setRouteDistance(details.distanceKm);
+        setRouteCoordinates(details.coordinates);
+        
+        // Calculate price based on tabulator
+        const cost = calculateShippingCost(details.distanceKm, branch.tarifas || []);
+        setOrderShippingCost(cost);
+      } catch (err) {
+        console.error("Error calculating route details:", err);
+      } finally {
+        setIsCalculatingRoute(false);
+      }
+    };
+
+    getRoute();
+  }, [orderTipoEntrega, orderBranchId, orderLat, orderLng, branches, settings.mapboxToken]);
+
+  // Fetch Mapbox Geocoding suggestions for checkout address input
+  useEffect(() => {
+    if (addressSelectedFromListRef.current) {
+      setAddressSuggestions([]);
+      addressSelectedFromListRef.current = false;
+      return;
+    }
+
+    if (!orderAddress || orderAddress.trim().length < 3) {
+      setAddressSuggestions([]);
+      return;
+    }
+
+    const delayDebounce = setTimeout(async () => {
+      const token = settings.mapboxToken;
+      if (!token || !token.trim().startsWith("pk.")) return;
+
+      setIsLoadingSuggestions(true);
+      try {
+        const url = `https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(orderAddress)}.json?access_token=${token}&country=mx&limit=5`;
+        const res = await fetch(url);
+        if (res.ok) {
+          const data = await res.json();
+          if (data.features) {
+            const suggestions = data.features.map((feat: any) => ({
+              place_name: feat.place_name,
+              center: feat.center // [lng, lat]
+            }));
+            setAddressSuggestions(suggestions);
+            setShowSuggestions(true);
+          }
+        }
+      } catch (err) {
+        console.error("Error fetching Mapbox suggestions:", err);
+      } finally {
+        setIsLoadingSuggestions(false);
+      }
+    }, 400);
+
+    return () => clearTimeout(delayDebounce);
+  }, [orderAddress, settings.mapboxToken]);
+
+  // Fetch Mapbox Geocoding suggestions for new branch address input
+  useEffect(() => {
+    if (newBranchAddressSelectedFromListRef.current) {
+      setNewBranchSuggestions([]);
+      newBranchAddressSelectedFromListRef.current = false;
+      return;
+    }
+
+    if (!newBranchAddress || newBranchAddress.trim().length < 3) {
+      setNewBranchSuggestions([]);
+      return;
+    }
+
+    const delayDebounce = setTimeout(async () => {
+      const token = settings.mapboxToken;
+      if (!token || !token.trim().startsWith("pk.")) return;
+
+      setIsLoadingNewBranchSuggestions(true);
+      try {
+        const url = `https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(newBranchAddress)}.json?access_token=${token}&country=mx&limit=5`;
+        const res = await fetch(url);
+        if (res.ok) {
+          const data = await res.json();
+          if (data.features) {
+            const suggestions = data.features.map((feat: any) => ({
+              place_name: feat.place_name,
+              center: feat.center // [lng, lat]
+            }));
+            setNewBranchSuggestions(suggestions);
+            setShowNewBranchSuggestions(true);
+          }
+        }
+      } catch (err) {
+        console.error("Error fetching Mapbox suggestions for branch:", err);
+      } finally {
+        setIsLoadingNewBranchSuggestions(false);
+      }
+    }, 400);
+
+    return () => clearTimeout(delayDebounce);
+  }, [newBranchAddress, settings.mapboxToken]);
+
+  // Fetch Mapbox Geocoding suggestions for edit branch address input
+  useEffect(() => {
+    if (editBranchAddressSelectedFromListRef.current) {
+      setEditBranchSuggestions([]);
+      editBranchAddressSelectedFromListRef.current = false;
+      return;
+    }
+
+    if (!editBranchAddress || editBranchAddress.trim().length < 3) {
+      setEditBranchSuggestions([]);
+      return;
+    }
+
+    const delayDebounce = setTimeout(async () => {
+      const token = settings.mapboxToken;
+      if (!token || !token.trim().startsWith("pk.")) return;
+
+      setIsLoadingEditBranchSuggestions(true);
+      try {
+        const url = `https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(editBranchAddress)}.json?access_token=${token}&country=mx&limit=5`;
+        const res = await fetch(url);
+        if (res.ok) {
+          const data = await res.json();
+          if (data.features) {
+            const suggestions = data.features.map((feat: any) => ({
+              place_name: feat.place_name,
+              center: feat.center // [lng, lat]
+            }));
+            setEditBranchSuggestions(suggestions);
+            setShowEditBranchSuggestions(true);
+          }
+        }
+      } catch (err) {
+        console.error("Error fetching Mapbox suggestions for edit branch:", err);
+      } finally {
+        setIsLoadingEditBranchSuggestions(false);
+      }
+    }, 400);
+
+    return () => clearTimeout(delayDebounce);
+  }, [editBranchAddress, settings.mapboxToken]);
+
+  const generateRandomCompanyId = () => {
+    const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%^&*_-";
+    let result = "";
+    for (let i = 0; i < 8; i++) {
+      result += chars.charAt(Math.floor(Math.random() * chars.length));
+    }
+    return result;
+  };
+
+  const slugify = (text: string) => {
+    return text
+      .toString()
+      .toLowerCase()
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '') // remove accents
+      .replace(/\s+/g, '-') // replace spaces with -
+      .replace(/[^\w\-]+/g, '') // remove all non-word chars
+      .replace(/\-\-+/g, '-') // replace multiple - with single -
+      .replace(/^-+/, '') // trim - from start
+      .replace(/-+$/, ''); // trim - from end
+  };
+
+  useEffect(() => {
+    if (activeTab === "create-company" && isSuperAdmin && !newCompId) {
+      setNewCompId(generateRandomCompanyId());
+    }
+  }, [activeTab, isSuperAdmin, newCompId]);
+
+  // Listen to Supabase auth changes to auto-logout on disconnect
+  useEffect(() => {
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
+      if (event === "SIGNED_OUT") {
+        const profileStr = localStorage.getItem("reparto_user_profile");
+        if (profileStr) {
+          try {
+            const profile = JSON.parse(profileStr);
+            if (profile.authProvider === "supabase") {
+              // Instead of logging out immediately on SIGNED_OUT (which can be caused by transient network
+              // failure or session refresh timeouts), we preserve the local session.
+              console.warn("Supabase auth SIGNED_OUT event triggered, but preserving local session to prevent disconnection.");
+            }
+          } catch {}
+        }
+      }
+    });
+
+    return () => {
+      subscription.unsubscribe();
+    };
+  }, [router]);
+
+  // Auto-load payment config when tab is active
+  useEffect(() => {
+    if (activeTab === "payment-config" && !payConfigLoaded) {
+      loadPaymentConfig();
+    }
+  }, [activeTab, payConfigLoaded, currentCompanyId]);
+
+  // Reset payment config loaded state when company changes
+  useEffect(() => {
+    setPayConfigLoaded(false);
+  }, [currentCompanyId]);
+
+  const handleLogout = async () => {
+    localStorage.removeItem("reparto_logged_in");
+    localStorage.removeItem("reparto_user_profile");
+    await supabase.auth.signOut().catch(() => {});
+    router.push("/");
+  };
+
+  const fetchBrokers = async () => {
+    try {
+      const { data, error } = await supabase.from("brokers").select("*");
+      if (!error && data) {
+        setBrokersList(data);
+      }
+    } catch (err) {
+      console.warn("Error fetching brokers:", err);
+    }
+  };
+
+  useEffect(() => {
+    if (activeTab === "create-broker" && isSuperAdmin) {
+      fetchBrokers();
+      fetchSaCompanies();
+    }
+  }, [activeTab, isSuperAdmin]);
+
+  if (!authorized) {
+    return (
+      <div style={{
+        display: "flex", 
+        height: "100vh", 
+        alignItems: "center", 
+        justifyContent: "center",
+        backgroundColor: "var(--bg-primary)",
+        color: "var(--text-secondary)"
+      }}>
+        Cargando Panel de Control...
+      </div>
+    );
+  }
+
+  // Calculation variables
+  const activeDrivers = drivers.filter(d => d.status !== "offline").length;
+  const transitDeliveries = deliveries.filter(d => d.status === "transit" || d.status === "assigned").length;
+  const deliveredDeliveries = deliveries.filter(d => d.status === "delivered").length;
+  const batteryAlerts = drivers.filter(d => d.battery < 20).length;
+  const totalDeliveries = deliveries.length;
+  const completionRate = totalDeliveries > 0 ? Math.round((deliveredDeliveries / totalDeliveries) * 100) : 0;
+
+  const activeStaff = personnel.filter(p => p.status === "active").length;
+  const activeMembers = activeDrivers + activeStaff;
+
+  // Add delivery order form handler
+  const handleCreateOrder = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newOrderCustomer || !newOrderAddress || !newOrderItems) return;
+
+    // Default to Monterrey center
+    const coords = [25.6866, -100.3161];
+    // Add tiny randomized offset so markers don't overlap perfectly
+    const lat = coords[0] + (Math.random() - 0.5) * 0.005;
+    const lng = coords[1] + (Math.random() - 0.5) * 0.005;
+
+    addDelivery({
+      customer: newOrderCustomer,
+      address: newOrderAddress,
+      lat,
+      lng,
+      items: newOrderItems
+    });
+
+    // Reset fields
+    setNewOrderCustomer("");
+    setNewOrderAddress("");
+    setNewOrderItems("");
+  };
+
+  // File upload helper for driver photos gallery
+  const handleDriverPhotosUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (!files || files.length === 0) return;
+    
+    if (newDriverPhotoFiles.length + files.length > 6) {
+      alert("Puedes subir un máximo de 6 fotos.");
+      return;
+    }
+
+    const updatedFiles = [...newDriverPhotoFiles];
+    const updatedUrls = [...newDriverPhotos];
+
+    for (let i = 0; i < files.length; i++) {
+      const file = files[i];
+      updatedFiles.push(file);
+
+      const reader = new FileReader();
+      reader.onload = (event) => {
+        if (event.target?.result) {
+          updatedUrls.push(event.target.result as string);
+          setNewDriverPhotos([...updatedUrls]);
+        }
+      };
+      reader.readAsDataURL(file);
+    }
+
+    setNewDriverPhotoFiles(updatedFiles);
+  };
+
+  // Add driver form handler
+  const handleCreateDriver = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newDriverName || !newDriverPhone) return;
+
+    setUploadingPhotos(true);
+    const uploadedUrls: string[] = [];
+
+    for (const file of newDriverPhotoFiles) {
+      try {
+        const fileName = `gallery/${Date.now()}_${file.name.replace(/[^a-zA-Z0-9.]/g, "_")}`;
+        const { data: uploadData, error: uploadErr } = await supabase.storage
+          .from("general")
+          .upload(fileName, file, {
+            cacheControl: "3600",
+            upsert: false
+          });
+
+        if (!uploadErr && uploadData) {
+          const { data: urlData } = supabase.storage
+            .from("general")
+            .getPublicUrl(fileName);
+          uploadedUrls.push(urlData.publicUrl);
+        } else {
+          console.warn("Storage gallery upload failed:", uploadErr);
+        }
+      } catch (err) {
+        console.error("Error uploading gallery file:", err);
+      }
+    }
+
+    addDriver({
+      name: newDriverName,
+      phone: newDriverPhone,
+      vehicle: newDriverVehicle,
+      modelo: newDriverModel,
+      placas: newDriverPlates,
+      sucursales: newDriverBranches,
+      fotosVehiculo: uploadedUrls
+    });
+
+    setNewDriverName("");
+    setNewDriverPhone("");
+    setNewDriverVehicle("Motocicleta");
+    setNewDriverModel("");
+    setNewDriverPlates("");
+    setNewDriverBranches([]);
+    setNewDriverPhotoFiles([]);
+    setNewDriverPhotos([]);
+    setUploadingPhotos(false);
+  };
+
+  // Create order form handler
+  const handleCreateOrderForm = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const isDelivery = orderTipoEntrega === "a_domicilio";
+    const requiredAddress = isDelivery ? orderAddress : (orderAddress || "Consumo en Local");
+    
+    if (!orderCustomerName || !orderBranchId || orderSelectedProducts.length === 0 || (isDelivery && !orderAddress)) {
+      alert("Por favor llena los campos requeridos y agrega al menos un producto.");
+      return;
+    }
+
+    try {
+      await addOrder({
+        customerName: orderCustomerName,
+        address: requiredAddress,
+        phone: orderPhone,
+        total: finalOrderTotal,
+        idSucursal: orderBranchId,
+        products: orderSelectedProducts,
+        tipoEntrega: orderTipoEntrega,
+        repartidorId: isDelivery && orderRepartidorId ? orderRepartidorId : null,
+        lat: isDelivery && orderLat ? orderLat : undefined,
+        lng: isDelivery && orderLng ? orderLng : undefined
+      } as any);
+
+      alert("¡Orden creada con éxito!");
+
+      setOrderCustomerName("");
+      setOrderAddress("");
+      setOrderPhone("");
+      setOrderBranchId("");
+      setOrderSelectedProducts([]);
+      setOrderTipoEntrega("a_domicilio");
+      setOrderRepartidorId("");
+      setOrderLat(null);
+      setOrderLng(null);
+      setOrderShippingCost(0);
+      setRouteDistance(null);
+      setRouteCoordinates([]);
+      setAddressSuggestions([]);
+      setPosSubTab("menu");
+    } catch (err: any) {
+      alert("Error al crear la orden: " + (err.message || err));
+    }
+  };
+
+  // Dispatch order to delivery
+  const handleDispatchOrder = (order: Order) => {
+    const coords = [25.6866, -100.3161]; // Default to Monterrey
+    // Use precise coordinates if they were set in the order, otherwise use Monterrey coords fallback
+    const lat = order.lat || (coords[0] + (Math.random() - 0.5) * 0.005);
+    const lng = order.lng || (coords[1] + (Math.random() - 0.5) * 0.005);
+
+    addDelivery({
+      customer: order.customerName,
+      address: order.address,
+      lat,
+      lng,
+      driverId: order.repartidorId || null,
+      items: order.products.map(p => `${p.quantity}x ${p.name}`).join(', '),
+      orderId: order.id
+    });
+
+    updateOrderStatus(order.id, 'en_camino');
+    alert(`¡Orden despachada! Se ha creado una entrega en la pestaña "Gestionar Órdenes".`);
+  };
+
+  // Staff vehicle photo upload (up to 5)
+  const handleStaffVehiclePhotosUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (!files || files.length === 0) return;
+
+    if (newStaffVehiclePhotoFiles.length + files.length > 5) {
+      alert("Puedes subir un máximo de 5 fotos del vehículo.");
+      return;
+    }
+
+    const updatedFiles = [...newStaffVehiclePhotoFiles];
+    const updatedPreviews = [...newStaffVehiclePhotoPreviews];
+
+    for (let i = 0; i < files.length; i++) {
+      const file = files[i];
+      updatedFiles.push(file);
+
+      const reader = new FileReader();
+      reader.onload = (event) => {
+        updatedPreviews.push(event.target?.result as string);
+        if (updatedPreviews.length === updatedFiles.length) {
+          setNewStaffVehiclePhotoPreviews(updatedPreviews);
+        }
+      };
+      reader.readAsDataURL(file);
+    }
+    setNewStaffVehiclePhotoFiles(updatedFiles);
+  };
+
+  const handleRemoveStaffVehiclePhotoPreview = (index: number) => {
+    setNewStaffVehiclePhotoFiles((prev) => prev.filter((_, idx) => idx !== index));
+    setNewStaffVehiclePhotoPreviews((prev) => prev.filter((_, idx) => idx !== index));
+  };
+
+  // Add personnel form handler
+  const handleCreateStaff = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newStaffName.trim() || !newStaffEmail.trim() || !newStaffPassword.trim() || !newStaffCompanyId) {
+      setStaffError("Por favor, llena los campos obligatorios (*).");
+      return;
+    }
+
+    setStaffIsLoading(true);
+    setStaffError("");
+    setStaffMessage("");
+
+    // Upload photo to Supabase general bucket if provided
+    let finalPhotoUrl = "https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=120&auto=format&fit=crop"; // Default placeholder
+    if (newStaffPhotoFile) {
+      try {
+        /* eslint-disable-next-line react-hooks/purity */
+        const fileName = `avatars/${Date.now()}_${newStaffPhotoFile.name.replace(/[^a-zA-Z0-9.]/g, "_")}`;
+        const { data: uploadData, error: uploadErr } = await supabase.storage
+          .from("general")
+          .upload(fileName, newStaffPhotoFile, {
+            cacheControl: "3600",
+            upsert: false
+          });
+
+        if (!uploadErr && uploadData) {
+          const { data: urlData } = supabase.storage
+            .from("general")
+            .getPublicUrl(fileName);
+          finalPhotoUrl = urlData.publicUrl;
+        } else {
+          console.warn("Storage avatar upload failed, using local fallback preview:", uploadErr);
+          if (newStaffPhoto) finalPhotoUrl = newStaffPhoto;
+        }
+      } catch (err) {
+        console.warn("Supabase storage error while uploading avatar:", err);
+        if (newStaffPhoto) finalPhotoUrl = newStaffPhoto;
+      }
+    } else if (newStaffPhoto) {
+      finalPhotoUrl = newStaffPhoto;
+    }
+
+    // Upload vehicle photos if Repartidor
+    const uploadedVehicleUrls: string[] = [];
+    if (newStaffRole === "Repartidor" && newStaffVehiclePhotoFiles.length > 0) {
+      setStaffUploadingVehiclePhotos(true);
+      for (const file of newStaffVehiclePhotoFiles) {
+        try {
+          const fileName = `vehiculos/${Date.now()}_${file.name.replace(/[^a-zA-Z0-9.]/g, "_")}`;
+          const { data: uploadData, error: uploadErr } = await supabase.storage
+            .from("general")
+            .upload(fileName, file, {
+              cacheControl: "3600",
+              upsert: false
+            });
+
+          if (!uploadErr && uploadData) {
+            const { data: urlData } = supabase.storage
+              .from("general")
+              .getPublicUrl(fileName);
+            uploadedVehicleUrls.push(urlData.publicUrl);
+          }
+        } catch (err) {
+          console.error("Error uploading vehicle photo:", err);
+        }
+      }
+      setStaffUploadingVehiclePhotos(false);
+    }
+
+    const userId = crypto.randomUUID();
+
+    // 1. Attempt to register in Supabase Auth using a raw HTTP fetch request to avoid library-level session synchronization
+    try {
+      const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || "";
+      const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || "";
+      
+      const response = await fetch(`${supabaseUrl}/auth/v1/signup`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "apikey": supabaseAnonKey
+        },
+        body: JSON.stringify({
+          email: newStaffEmail.trim().toLowerCase(),
+          password: newStaffPassword
+        })
+      });
+
+      const resData = await response.json();
+
+      if (!response.ok || resData.error) {
+        const errorMsg = resData.msg || resData.message || resData.error?.message || resData.error_description || resData.error || "Unknown error";
+        console.warn("Supabase Auth sign up failed, registering locally/public only:", errorMsg);
+      } else {
+        const finalUserId = resData.id || resData.user?.id;
+        if (finalUserId) {
+          const cleanedPhone = newStaffPhone.trim().replace(/\D/g, "");
+          const phoneVal = cleanedPhone ? Number(cleanedPhone) : null;
+
+          const newUserProfile = {
+            IDUser: finalUserId,
+            name: newStaffName.trim(),
+            mail: newStaffEmail.trim().toLowerCase(),
+            isAdmin: newStaffRole === "Repartidor" ? false : true,
+            superAdmin: false,
+            Rol: newStaffRole,
+            phone: phoneVal,
+            IDEmpresa: newStaffCompanyId,
+            foto: finalPhotoUrl,
+            Sucursales: newStaffBranches,
+            TipoVehiculo: newStaffRole === "Repartidor" ? newStaffVehicle : null,
+            ModeloVehiculo: newStaffRole === "Repartidor" ? newStaffVehicleModel : null,
+            Placas: newStaffRole === "Repartidor" ? newStaffVehiclePlates : null,
+            FotosDelVehiculo: newStaffRole === "Repartidor" ? uploadedVehicleUrls : []
+          };
+
+          const { error: dbErr } = await supabase.from("users").upsert(newUserProfile, { onConflict: "IDUser" });
+          if (dbErr) {
+            console.warn("Auth registered user but users profile table upsert failed:", dbErr.message);
+          }
+          
+          // Add to local state
+          addPersonnel({
+            id: finalUserId,
+            name: newStaffName.trim(),
+            email: newStaffEmail.trim().toLowerCase(),
+            role: newStaffRole,
+            status: "active",
+            shift: newStaffShift,
+            phone: phoneVal,
+            foto: finalPhotoUrl,
+            sucursales: newStaffBranches,
+            vehicle: newStaffRole === "Repartidor" ? newStaffVehicle : undefined,
+            modelo: newStaffRole === "Repartidor" ? newStaffVehicleModel : undefined,
+            placas: newStaffRole === "Repartidor" ? newStaffVehiclePlates : undefined,
+            fotosVehiculo: newStaffRole === "Repartidor" ? uploadedVehicleUrls : []
+          });
+
+          // Save locally for login checks
+          try {
+            const localUsers = JSON.parse(localStorage.getItem("reparto_local_users") || "[]");
+            localUsers.push({
+              ...newUserProfile,
+              password: newStaffPassword.trim()
+            });
+            localStorage.setItem("reparto_local_users", JSON.stringify(localUsers));
+          } catch (err) {
+            console.error("Local storage error:", err);
+          }
+
+          const compObj = superAdminCompanies.find(c => c.idEmpresa === newStaffCompanyId);
+          const companyName = compObj ? (compObj.Nombre_Empresa || compObj.NombreEmpresa) : undefined;
+
+          sendWelcomeEmail({
+            name: newStaffName.trim(),
+            email: newStaffEmail.trim().toLowerCase(),
+            role: newStaffRole,
+            password: newStaffPassword.trim(),
+            companyName: companyName,
+            shift: newStaffShift,
+            phone: newStaffPhone.trim() || undefined
+          });
+
+          setStaffMessage("Operador registrado y guardado con éxito.");
+          resetStaffForm();
+          setStaffIsLoading(false);
+          return;
+        }
+      }
+    } catch (err) {
+      console.warn("Database registration failed or offline, falling back to local only registration:", err);
+    }
+
+    // 2. Offline / Fallback registration
+    const cleanedPhone = newStaffPhone.trim().replace(/\D/g, "");
+    const phoneVal = cleanedPhone ? Number(cleanedPhone) : null;
+    const localUserObj = {
+      IDUser: userId,
+      name: newStaffName.trim(),
+      mail: newStaffEmail.trim().toLowerCase(),
+      isAdmin: newStaffRole === "Repartidor" ? false : true,
+      superAdmin: false,
+      Rol: newStaffRole,
+      phone: phoneVal,
+      IDEmpresa: newStaffCompanyId,
+      foto: finalPhotoUrl,
+      Sucursales: newStaffBranches,
+      TipoVehiculo: newStaffRole === "Repartidor" ? newStaffVehicle : null,
+      ModeloVehiculo: newStaffRole === "Repartidor" ? newStaffVehicleModel : null,
+      Placas: newStaffRole === "Repartidor" ? newStaffVehiclePlates : null,
+      FotosDelVehiculo: newStaffRole === "Repartidor" ? uploadedVehicleUrls : []
+    };
+
+    try {
+      const localUsers = JSON.parse(localStorage.getItem("reparto_local_users") || "[]");
+      if (localUsers.some((u: { mail: string }) => u.mail.toLowerCase() === localUserObj.mail.toLowerCase())) {
+        setStaffError("Este correo electrónico ya está registrado localmente.");
+        setStaffIsLoading(false);
+        return;
+      }
+      localUsers.push({
+        ...localUserObj,
+        password: newStaffPassword.trim()
+      });
+      localStorage.setItem("reparto_local_users", JSON.stringify(localUsers));
+    } catch (err) {
+      console.error("Local storage error:", err);
+    }
+
+    addPersonnel({
+      id: userId,
+      name: newStaffName.trim(),
+      email: newStaffEmail.trim().toLowerCase(),
+      role: newStaffRole,
+      status: "active",
+      shift: newStaffShift,
+      phone: phoneVal,
+      foto: finalPhotoUrl,
+      sucursales: newStaffBranches,
+      vehicle: newStaffRole === "Repartidor" ? newStaffVehicle : undefined,
+      modelo: newStaffRole === "Repartidor" ? newStaffVehicleModel : undefined,
+      placas: newStaffRole === "Repartidor" ? newStaffVehiclePlates : undefined,
+      fotosVehiculo: newStaffRole === "Repartidor" ? uploadedVehicleUrls : []
+    });
+
+    const compObj = superAdminCompanies.find(c => c.idEmpresa === newStaffCompanyId);
+    const companyName = compObj ? (compObj.Nombre_Empresa || compObj.NombreEmpresa) : undefined;
+
+    sendWelcomeEmail({
+      name: newStaffName.trim(),
+      email: newStaffEmail.trim().toLowerCase(),
+      role: newStaffRole,
+      password: newStaffPassword.trim(),
+      companyName: companyName,
+      shift: newStaffShift,
+      phone: newStaffPhone.trim() || undefined
+    });
+
+    setStaffMessage("Operador registrado con éxito en modo local.");
+    resetStaffForm();
+    setStaffIsLoading(false);
+  };
+
+  const resetStaffForm = () => {
+    setNewStaffName("");
+    setNewStaffEmail("");
+    setNewStaffPassword("");
+    setNewStaffPhone("");
+    setNewStaffPhoto("");
+    setNewStaffPhotoFile(null);
+    setNewStaffRole("Dispatcher");
+    setNewStaffShift("Matutino");
+    setNewStaffBranches([]);
+    setNewStaffVehicle("Motocicleta");
+    setNewStaffVehicleModel("");
+    setNewStaffVehiclePlates("");
+    setNewStaffVehiclePhotoFiles([]);
+    setNewStaffVehiclePhotoPreviews([]);
+  };
+
+  // Add SuperAdmin form handler
+  const handleCreateSuperAdmin = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newSaName.trim() || !newSaEmail.trim() || !newSaPassword.trim()) {
+      setSaError("Por favor, llena los campos obligatorios (*).");
+      return;
+    }
+
+    setSaIsLoading(true);
+    setSaError("");
+    setSaMessage("");
+
+    // Upload photo to Supabase general bucket if provided
+    let finalPhotoUrl = "https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=120&auto=format&fit=crop"; // Default placeholder
+    if (newSaPhotoFile) {
+      try {
+        const fileName = `avatars/${Date.now()}_${newSaPhotoFile.name.replace(/[^a-zA-Z0-9.]/g, "_")}`;
+        const { data: uploadData, error: uploadErr } = await supabase.storage
+          .from("general")
+          .upload(fileName, newSaPhotoFile, {
+            cacheControl: "3600",
+            upsert: false
+          });
+
+        if (!uploadErr && uploadData) {
+          const { data: urlData } = supabase.storage
+            .from("general")
+            .getPublicUrl(fileName);
+          finalPhotoUrl = urlData.publicUrl;
+        } else {
+          console.warn("Storage avatar upload failed, using local fallback preview:", uploadErr);
+          if (newSaPhoto) finalPhotoUrl = newSaPhoto;
+        }
+      } catch (err) {
+        console.warn("Supabase storage error while uploading avatar:", err);
+        if (newSaPhoto) finalPhotoUrl = newSaPhoto;
+      }
+    } else if (newSaPhoto) {
+      finalPhotoUrl = newSaPhoto;
+    }
+
+    const userId = crypto.randomUUID();
+
+    // 1. Attempt to register in Supabase Auth using a raw HTTP fetch request to avoid library-level session synchronization
+    try {
+      const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || "";
+      const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || "";
+      
+      const response = await fetch(`${supabaseUrl}/auth/v1/signup`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "apikey": supabaseAnonKey
+        },
+        body: JSON.stringify({
+          email: newSaEmail.trim().toLowerCase(),
+          password: newSaPassword
+        })
+      });
+
+      const resData = await response.json();
+
+      if (!response.ok || resData.error) {
+        const errorMsg = resData.msg || resData.message || resData.error?.message || resData.error_description || resData.error || "Unknown error";
+        console.warn("Supabase Auth sign up failed, registering locally/public only:", errorMsg);
+      } else {
+        const finalUserId = resData.id || resData.user?.id;
+        if (finalUserId) {
+          const cleanedPhone = newSaPhone.trim().replace(/\D/g, "");
+          const phoneVal = cleanedPhone ? Number(cleanedPhone) : null;
+
+          const newUserProfile = {
+            IDUser: finalUserId,
+            name: newSaName.trim(),
+            mail: newSaEmail.trim().toLowerCase(),
+            isAdmin: true,
+            superAdmin: true,
+            Rol: "Administrador",
+            phone: phoneVal,
+            IDEmpresa: null,
+            foto: finalPhotoUrl,
+            Sucursales: [],
+            TipoVehiculo: null,
+            ModeloVehiculo: null,
+            Placas: null,
+            FotosDelVehiculo: []
+          };
+
+          const { error: dbErr } = await supabase.from("users").upsert(newUserProfile, { onConflict: "IDUser" });
+          if (dbErr) {
+            console.warn("Auth registered user but users profile table upsert failed:", dbErr.message);
+          }
+          
+          // Save locally for login checks
+          try {
+            const localUsers = JSON.parse(localStorage.getItem("reparto_local_users") || "[]");
+            localUsers.push({
+              ...newUserProfile,
+              password: newSaPassword.trim()
+            });
+            localStorage.setItem("reparto_local_users", JSON.stringify(localUsers));
+          } catch (err) {
+            console.error("Local storage error:", err);
+          }
+
+          sendWelcomeEmail({
+            name: newSaName.trim(),
+            email: newSaEmail.trim().toLowerCase(),
+            role: "Super Administrador",
+            password: newSaPassword.trim(),
+            phone: newSaPhone.trim() || undefined
+          });
+
+          setSaMessage("Super Administrador registrado y guardado con éxito.");
+          resetSaForm();
+          fetchSuperAdmins();
+          setSaIsLoading(false);
+          return;
+        }
+      }
+    } catch (err) {
+      console.warn("Database registration failed or offline, falling back to local only registration:", err);
+    }
+
+    // 2. Offline / Fallback registration
+    const cleanedPhone = newSaPhone.trim().replace(/\D/g, "");
+    const phoneVal = cleanedPhone ? Number(cleanedPhone) : null;
+    const localUserObj = {
+      IDUser: userId,
+      name: newSaName.trim(),
+      mail: newSaEmail.trim().toLowerCase(),
+      isAdmin: true,
+      superAdmin: true,
+      Rol: "Administrador",
+      phone: phoneVal,
+      IDEmpresa: null,
+      foto: finalPhotoUrl,
+      Sucursales: [],
+      TipoVehiculo: null,
+      ModeloVehiculo: null,
+      Placas: null,
+      FotosDelVehiculo: []
+    };
+
+    try {
+      const localUsers = JSON.parse(localStorage.getItem("reparto_local_users") || "[]");
+      if (localUsers.some((u: { mail: string }) => u.mail.toLowerCase() === localUserObj.mail.toLowerCase())) {
+        setSaError("Este correo electrónico ya está registrado localmente.");
+        setSaIsLoading(false);
+        return;
+      }
+      localUsers.push({
+        ...localUserObj,
+        password: newSaPassword.trim()
+      });
+      localStorage.setItem("reparto_local_users", JSON.stringify(localUsers));
+    } catch (err) {
+      console.error("Local storage error:", err);
+    }
+
+    sendWelcomeEmail({
+      name: newSaName.trim(),
+      email: newSaEmail.trim().toLowerCase(),
+      role: "Super Administrador",
+      password: newSaPassword.trim(),
+      phone: newSaPhone.trim() || undefined
+    });
+
+    setSaMessage("Super Administrador registrado con éxito en modo local.");
+    resetSaForm();
+    fetchSuperAdmins();
+    setSaIsLoading(false);
+  };
+
+  const resetSaForm = () => {
+    setNewSaName("");
+    setNewSaEmail("");
+    setNewSaPassword("");
+    setNewSaPhone("");
+    setNewSaPhoto("");
+    setNewSaPhotoFile(null);
+  };
+
+  const handleSaPhotoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      if (event.target?.result) {
+        setNewSaPhoto(event.target.result as string);
+        setNewSaPhotoFile(file);
+      }
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const removeSuperAdmin = async (staffId: string) => {
+    setSuperAdmins((prev) => prev.filter((stf) => stf.id !== staffId));
+
+    try {
+      const localUsers = JSON.parse(localStorage.getItem("reparto_local_users") || "[]");
+      const updatedLocal = localUsers.filter((u: any) => u.IDUser !== staffId);
+      localStorage.setItem("reparto_local_users", JSON.stringify(updatedLocal));
+    } catch (e) {
+      console.error("Local storage error:", e);
+    }
+
+    try {
+      const { error } = await supabase.from("users").delete().eq("IDUser", staffId);
+      if (error) throw error;
+    } catch (err) {
+      console.error("Error deleting superAdmin user in Supabase:", err);
+    }
+    fetchSuperAdmins();
+  };
+
+  const handleStartEditStaff = (staff: Staff) => {
+    setEditingStaff(staff);
+    setEditStaffName(staff.name);
+    setEditStaffEmail(staff.email);
+    setEditStaffPhone(staff.phone ? String(staff.phone) : "");
+    setEditStaffRole(staff.role);
+    setEditStaffShift(staff.shift || "Matutino");
+    setEditStaffBranches(staff.sucursales || []);
+    setEditStaffStatus(staff.status || "active");
+    setEditStaffVehicle(staff.vehicle || "Motocicleta");
+    setEditStaffVehicleModel(staff.modelo || "");
+    setEditStaffVehiclePlates(staff.placas || "");
+  };
+
+  const handleSaveStaffEdit = () => {
+    if (!editingStaff) return;
+    const phoneVal = editStaffPhone.trim() ? editStaffPhone.trim() : "";
+    const updatedStaff: Staff = {
+      ...editingStaff,
+      name: editStaffName.trim(),
+      email: editStaffEmail.trim().toLowerCase(),
+      phone: phoneVal,
+      role: editStaffRole,
+      shift: editStaffShift,
+      sucursales: editStaffBranches,
+      status: editStaffStatus,
+      vehicle: editStaffRole === "Repartidor" ? editStaffVehicle : undefined,
+      modelo: editStaffRole === "Repartidor" ? editStaffVehicleModel.trim() : undefined,
+      placas: editStaffRole === "Repartidor" ? editStaffVehiclePlates.trim() : undefined,
+    };
+    updatePersonnel(updatedStaff);
+
+    // Sync to current user profile if the edited user is the logged in user
+    try {
+      const profileStr = localStorage.getItem("reparto_user_profile");
+      if (profileStr) {
+        const profile = JSON.parse(profileStr);
+        if (profile.email === updatedStaff.email || profile.mail === updatedStaff.email) {
+          const updatedProfile = {
+            ...profile,
+            name: updatedStaff.name,
+            email: updatedStaff.email,
+            mail: updatedStaff.email,
+            role: updatedStaff.role,
+            phone: updatedStaff.phone
+          };
+          localStorage.setItem("reparto_user_profile", JSON.stringify(updatedProfile));
+        }
+      }
+    } catch (e) {
+      console.error("Error syncing edited profile to local storage:", e);
+    }
+
+    setEditingStaff(null);
+  };
+
+  const handleStaffPhotoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      setNewStaffPhoto(event.target?.result as string);
+      setNewStaffPhotoFile(file);
+      setStaffError("");
+    };
+    reader.onerror = () => {
+      setStaffError("Error al procesar la imagen cargada.");
+      setNewStaffPhoto("");
+      setNewStaffPhotoFile(null);
+    };
+    reader.readAsDataURL(file);
+  };
+
+  // Product photo upload (up to 8)
+  const handleProductPhotosUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (!files || files.length === 0) return;
+
+    if (newProductPhotoFiles.length + files.length > 8) {
+      alert("Puedes subir un máximo de 8 fotos por producto.");
+      return;
+    }
+
+    const updatedFiles = [...newProductPhotoFiles];
+    const updatedPreviews = [...newProductPhotoPreviews];
+
+    for (let i = 0; i < files.length; i++) {
+      const file = files[i];
+      updatedFiles.push(file);
+
+      const reader = new FileReader();
+      reader.onload = (event) => {
+        updatedPreviews.push(event.target?.result as string);
+        if (updatedPreviews.length === updatedFiles.length) {
+          setNewProductPhotoPreviews(updatedPreviews);
+        }
+      };
+      reader.readAsDataURL(file);
+    }
+    setNewProductPhotoFiles(updatedFiles);
+  };
+
+  const handleRemoveProductPhotoPreview = (index: number) => {
+    setNewProductPhotoFiles((prev) => prev.filter((_, idx) => idx !== index));
+    setNewProductPhotoPreviews((prev) => prev.filter((_, idx) => idx !== index));
+  };
+
+  // Add/Edit product form handler
+  const handleCreateProduct = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newProductName || !newProductPrice) return;
+
+    setProductUploadingPhotos(true);
+    const uploadedUrls: string[] = [];
+
+    // Keep existing HTTP URLs
+    const existingUrls = newProductPhotoPreviews.filter(p => p.startsWith("http"));
+    uploadedUrls.push(...existingUrls);
+
+    // Upload new files
+    for (const file of newProductPhotoFiles) {
+      try {
+        const fileName = `productos/${Date.now()}_${file.name.replace(/[^a-zA-Z0-9.]/g, "_")}`;
+        const { data: uploadData, error: uploadErr } = await supabase.storage
+          .from("general")
+          .upload(fileName, file, {
+            cacheControl: "3600",
+            upsert: false
+          });
+
+        if (!uploadErr && uploadData) {
+          const { data: urlData } = supabase.storage
+            .from("general")
+            .getPublicUrl(fileName);
+          uploadedUrls.push(urlData.publicUrl);
+        } else {
+          console.warn("Product storage photo upload failed:", uploadErr);
+        }
+      } catch (err) {
+        console.error("Error uploading product photo:", err);
+      }
+    }
+
+    const productPayload = {
+      name: newProductName,
+      price: Number(newProductPrice),
+      description: newProductDesc,
+      category: newProductCategory,
+      idSucursales: newProductBranches,
+      fotos: uploadedUrls
+    };
+
+    if (editingProduct) {
+      updateProduct({
+        ...editingProduct,
+        ...productPayload
+      });
+      setEditingProduct(null);
+    } else {
+      addProduct(productPayload);
+    }
+
+    setNewProductName("");
+    setNewProductPrice("");
+    setNewProductDesc("");
+    setNewProductCategory("Comida");
+    setNewProductBranches(branches.map(b => b.id));
+    setNewProductPhotoFiles([]);
+    setNewProductPhotoPreviews([]);
+    setProductUploadingPhotos(false);
+  };
+
+  const handleEditProductClick = (product: Product) => {
+    setEditingProduct(product);
+    setNewProductName(product.name);
+    setNewProductPrice(String(product.price));
+    setNewProductDesc(product.description || "");
+    setNewProductCategory(product.category || "Comida");
+    setNewProductBranches(product.idSucursales || []);
+    setNewProductPhotoFiles([]);
+    setNewProductPhotoPreviews(product.fotos || []);
+  };
+
+  const handleCancelProductEdit = () => {
+    setEditingProduct(null);
+    setNewProductName("");
+    setNewProductPrice("");
+    setNewProductDesc("");
+    setNewProductCategory("Comida");
+    setNewProductBranches(branches.map(b => b.id));
+    setNewProductPhotoFiles([]);
+    setNewProductPhotoPreviews([]);
+  };
+
+  // Add branch phone inputs manipulation
+  const handleAddBranchPhoneField = () => {
+    setNewBranchPhones((prev) => [...prev, ""]);
+  };
+
+  const handleBranchPhoneChange = (index: number, value: string) => {
+    const updated = [...newBranchPhones];
+    updated[index] = value;
+    setNewBranchPhones(updated);
+  };
+
+  const handleRemoveBranchPhoneField = (index: number) => {
+    if (newBranchPhones.length > 1) {
+      setNewBranchPhones((prev) => prev.filter((_, idx) => idx !== index));
+    }
+  };
+
+  // File upload helper for branch photos gallery (maximum 6 photos)
+  const handleBranchPhotosUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (!files || files.length === 0) return;
+
+    if (newBranchPhotoFiles.length + files.length > 6) {
+      alert("Puedes subir un máximo de 6 fotos por sucursal.");
+      return;
+    }
+
+    const updatedFiles = [...newBranchPhotoFiles];
+    const updatedPreviews = [...newBranchPhotoPreviews];
+
+    for (let i = 0; i < files.length; i++) {
+      const file = files[i];
+      updatedFiles.push(file);
+
+      const reader = new FileReader();
+      reader.onload = (event) => {
+        if (event.target?.result) {
+          updatedPreviews.push(event.target.result as string);
+          setNewBranchPhotoPreviews([...updatedPreviews]);
+        }
+      };
+      reader.readAsDataURL(file);
+    }
+    setNewBranchPhotoFiles(updatedFiles);
+  };
+
+  const handleRemoveBranchPhotoPreview = (index: number) => {
+    setNewBranchPhotoFiles((prev) => prev.filter((_, idx) => idx !== index));
+    setNewBranchPhotoPreviews((prev) => prev.filter((_, idx) => idx !== index));
+  };
+
+  const handleAddBranchRate = () => {
+    setNewBranchRates(prev => [...prev, { min_km: undefined, max_km: undefined, precio: undefined }]);
+  };
+  
+  const handleRemoveBranchRate = (index: number) => {
+    setNewBranchRates(prev => prev.filter((_, idx) => idx !== index));
+  };
+  
+  const handleBranchRateChange = (index: number, field: keyof TarifaItem, value: any) => {
+    const updated = [...newBranchRates];
+    updated[index] = {
+      ...updated[index],
+      [field]: value === "" ? undefined : Number(value)
+    };
+    setNewBranchRates(updated);
+  };
+
+  const handleStartEditBranch = (branch: Branch) => {
+    setEditBranchName(branch.name);
+    setEditBranchAddress(branch.address);
+    setEditBranchMapLink(branch.mapLink || "");
+    setEditBranchPhones(branch.telefonos && branch.telefonos.length > 0 ? branch.telefonos : [branch.phone].filter(Boolean));
+    setEditBranchLat(branch.lat || null);
+    setEditBranchLng(branch.lng || null);
+    
+    // Separate regular rates from extra km rate
+    const regularRates = (branch.tarifas || []).filter(t => !t.km_extra);
+    const extraRate = (branch.tarifas || []).find(t => t.km_extra);
+    
+    setEditBranchRates(regularRates.length > 0 ? regularRates : [{ min_km: 0, max_km: 3, precio: 40 }]);
+    setEditBranchExtraKmPrice(extraRate?.precio_por_km?.toString() || "10");
+    setEditBranchStatus(branch.status);
+    setIsEditingBranch(true);
+  };
+
+  const handleSaveBranchEdit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedBranchDetail) return;
+    
+    const validPhones = editBranchPhones.filter(p => p.trim() !== "");
+    
+    // Combine regular rates and extra rate
+    const combinedTarifas: TarifaItem[] = [
+      ...editBranchRates.map(r => ({
+        min_km: r.min_km,
+        max_km: r.max_km,
+        precio: r.precio
+      })),
+      {
+        km_extra: true,
+        precio_por_km: Number(editBranchExtraKmPrice) || 0
+      }
+    ];
+    
+    const updatedBranch: Branch = {
+      ...selectedBranchDetail,
+      name: editBranchName,
+      address: editBranchAddress,
+      mapLink: editBranchMapLink.trim(),
+      phone: validPhones[0] || "",
+      telefonos: validPhones,
+      status: editBranchStatus,
+      disponibilidad: editBranchStatus === "active",
+      tarifas: combinedTarifas,
+      lat: editBranchLat !== null ? editBranchLat : selectedBranchDetail.lat,
+      lng: editBranchLng !== null ? editBranchLng : selectedBranchDetail.lng
+    };
+    
+    updateBranch(updatedBranch);
+    setSelectedBranchDetail(updatedBranch);
+    setIsEditingBranch(false);
+    setEditBranchLat(null);
+    setEditBranchLng(null);
+    setEditBranchMapLink("");
+  };
+
+  // Add branch form handler
+  const handleCreateBranch = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newBranchName || !newBranchAddress) return;
+
+    setBranchUploadingPhotos(true);
+    const uploadedUrls: string[] = [];
+
+    // Filter out empty phone strings
+    const validPhones = newBranchPhones.filter(p => p.trim() !== "");
+    const primaryPhone = validPhones[0] || "";
+
+    // Upload photos to bucket
+    for (const file of newBranchPhotoFiles) {
+      try {
+        const fileName = `sucursales/${Date.now()}_${file.name.replace(/[^a-zA-Z0-9.]/g, "_")}`;
+        const { data: uploadData, error: uploadErr } = await supabase.storage
+          .from("general")
+          .upload(fileName, file, {
+            cacheControl: "3600",
+            upsert: false
+          });
+
+        if (!uploadErr && uploadData) {
+          const { data: urlData } = supabase.storage
+            .from("general")
+            .getPublicUrl(fileName);
+          uploadedUrls.push(urlData.publicUrl);
+        } else {
+          console.warn("Branch storage photo upload failed:", uploadErr);
+        }
+      } catch (err) {
+        console.error("Error uploading branch photo:", err);
+      }
+    }
+
+    // Combine regular rates and extra rate
+    const combinedTarifas: TarifaItem[] = [
+      ...newBranchRates.map(r => ({
+        min_km: r.min_km,
+        max_km: r.max_km,
+        precio: r.precio
+      })),
+      {
+        km_extra: true,
+        precio_por_km: Number(newBranchExtraKmPrice) || 0
+      }
+    ];
+
+    addBranch({
+      name: newBranchName,
+      address: newBranchAddress,
+      mapLink: newBranchMapLink.trim(),
+      phone: primaryPhone,
+      status: "active",
+      telefonos: validPhones,
+      fotos: uploadedUrls,
+      disponibilidad: true,
+      tarifas: combinedTarifas,
+      lat: newBranchLat || undefined,
+      lng: newBranchLng || undefined
+    });
+
+    setNewBranchName("");
+    setNewBranchAddress("");
+    setNewBranchMapLink("");
+    setNewBranchPhone("");
+    setNewBranchPhones([""]);
+    setNewBranchLat(null);
+    setNewBranchLng(null);
+    setNewBranchRates([{ min_km: 0, max_km: 3, precio: 40 }]);
+    setNewBranchExtraKmPrice("10");
+    setNewBranchPhotoFiles([]);
+    setNewBranchPhotoPreviews([]);
+    setBranchUploadingPhotos(false);
+  };
+
+  // Save Settings handler
+  const handleSaveSettings = (e: React.FormEvent) => {
+    e.preventDefault();
+    setMapboxToken(localMapboxToken);
+    alert("Configuración de Mapbox guardada correctamente.");
+  };
+
+
+
+
+  const handleCompLogoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    setCompError("");
+    setCompMessage("");
+
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      const img = new Image();
+      img.onload = () => {
+        if (img.width !== img.height) {
+          setCompError("El logo debe ser una imagen cuadrada (relación de aspecto 1:1).");
+          setNewCompLogoPreview("");
+          setNewCompLogoFile(null);
+          return;
+        }
+        if (img.width > 1000 || img.height > 1000) {
+          setCompError(`El logo excede las dimensiones máximas permitidas (1000x1000 px). Su imagen es de ${img.width}x${img.height} px.`);
+          setNewCompLogoPreview("");
+          setNewCompLogoFile(null);
+          return;
+        }
+        setNewCompLogoPreview(event.target?.result as string);
+        setNewCompLogoFile(file);
+      };
+      img.onerror = () => {
+        setCompError("Error al procesar la imagen cargada.");
+        setNewCompLogoPreview("");
+        setNewCompLogoFile(null);
+      };
+      img.src = event.target?.result as string;
+    };
+    reader.onerror = () => {
+      setCompError("Error al leer el archivo de la imagen.");
+      setNewCompLogoPreview("");
+      setNewCompLogoFile(null);
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const handleAddCompPhone = () => {
+    if (newCompPhones.length < 3) {
+      setNewCompPhones([...newCompPhones, ""]);
+    }
+  };
+
+  const handleRemoveCompPhone = (index: number) => {
+    if (newCompPhones.length > 1) {
+      setNewCompPhones(newCompPhones.filter((_, idx) => idx !== index));
+    } else {
+      setNewCompPhones([""]);
+    }
+  };
+
+  const handleCompPhoneChange = (index: number, value: string) => {
+    const updated = [...newCompPhones];
+    updated[index] = value;
+    setNewCompPhones(updated);
+  };
+
+  const resetCompanyForm = () => {
+    setEditingCompany(null);
+    setNewCompId(generateRandomCompanyId());
+    setNewCompName("");
+    setNewCompOwner("");
+    setNewCompEmail("");
+    setNewCompPassword("");
+    setNewCompUrl("");
+    setNewCompLogoPreview("");
+    setNewCompLogoFile(null);
+    setNewCompPhones([""]);
+    setNewCompDesc("");
+    setNewCompAddress("");
+    setCompIsLoading(false);
+  };
+
+  const handleEditCompanyClick = (comp: any) => {
+    setEditingCompany(comp);
+    setCompError("");
+    setCompMessage("");
+    setNewCompName(comp.NombreEmpresa || comp.Nombre_Empresa || "");
+    setNewCompOwner(comp.PropietarioEmpresa || comp.PropietarioEmpres || comp.PropietarioEmpresaNombre || "");
+    setNewCompEmail(comp.mailEmpresa || "");
+    setNewCompUrl(comp.urlEmpresaUnico || "");
+    setNewCompLogoPreview(comp.logoEmpresa || comp.foto_empresa || "");
+    setNewCompLogoFile(null);
+    setNewCompPhones(comp.TelefonosEmpresa && comp.TelefonosEmpresa.length > 0 ? comp.TelefonosEmpresa : [""]);
+    setNewCompDesc(comp.DescripcionEmpresa || "");
+    setNewCompAddress(comp.DireccionEmpresa || "");
+  };
+
+  const handleDeleteCompanyClick = async (idEmpresa: string, name: string) => {
+    if (!isSuperAdmin) {
+      alert("Acción no autorizada. Solo los SuperAdministradores pueden eliminar empresas.");
+      return;
+    }
+
+    // Warning 1
+    const confirm1 = window.confirm(`[AVISO 1/3] ¿Está seguro de que desea eliminar la empresa "${name}"? Esta acción borrará la empresa.`);
+    if (!confirm1) return;
+
+    // Warning 2
+    const confirm2 = window.confirm(`[AVISO 2/3] ⚠️ ¡ATENCIÓN CRÍTICA! Al eliminar esta empresa se borrarán de forma PERMANENTE todas sus sucursales, productos, conductores y órdenes de entrega asociados. ¿Está absolutamente seguro de continuar?`);
+    if (!confirm2) return;
+
+    // Warning 3
+    const confirm3 = window.confirm(`[AVISO 3/3] 🛑 CONFIRMACIÓN FINAL: ¿Confirma la eliminación definitiva de la empresa "${name}" y todos sus datos vinculados? Una vez ejecutado, no se podrá recuperar la información.`);
+    if (!confirm3) return;
+
+    setCompIsLoading(true);
+    setCompError("");
+    setCompMessage("");
+
+    let deletedInDb = false;
+
+    try {
+      // 1. Delete associated records in Supabase
+      await supabase.from("users").delete().eq("IDEmpresa", idEmpresa);
+      await supabase.from("Sucursales").delete().eq("IDEmpresa", idEmpresa);
+      await supabase.from("products").delete().eq("idEmpresa", idEmpresa);
+      await supabase.from("deliveries").delete().eq("idEmpresa", idEmpresa);
+      await supabase.from("ordenes").delete().eq("id_empresa", idEmpresa);
+      
+      // 2. Delete the company record
+      const { error } = await supabase
+        .from("Empresa")
+        .delete()
+        .eq("idEmpresa", idEmpresa);
+
+      if (!error) {
+        deletedInDb = true;
+      } else {
+        console.warn("Database deletion failed:", error.message);
+        throw error;
+      }
+    } catch (err: any) {
+      console.warn("Error deleting company in database, removing local fallback only:", err);
+    }
+
+    // 3. Delete from localStorage backup
+    try {
+      const localCompanies = JSON.parse(localStorage.getItem("reparto_local_companies") || "[]");
+      const filteredCompanies = localCompanies.filter((c: any) => c.idEmpresa !== idEmpresa);
+      localStorage.setItem("reparto_local_companies", JSON.stringify(filteredCompanies));
+
+      const localUsers = JSON.parse(localStorage.getItem("reparto_local_users") || "[]");
+      const filteredUsers = localUsers.filter((u: any) => u.IDEmpresa !== idEmpresa);
+      localStorage.setItem("reparto_local_users", JSON.stringify(filteredUsers));
+    } catch (e) {
+      console.error("Local storage deletion error:", e);
+    }
+
+    setCompIsLoading(false);
+    setCompMessage(
+      deletedInDb
+        ? `¡La empresa "${name}" y todos sus datos asociados fueron eliminados con éxito de la base de datos!`
+        : `La empresa "${name}" fue eliminada localmente.`
+    );
+
+    // If deleting the company we are currently viewing, reset the company ID to default mock company
+    const profile = localStorage.getItem("reparto_user_profile");
+    if (profile) {
+      try {
+        const parsed = JSON.parse(profile);
+        const activeCompanyId = parsed.IDEmpresa || parsed.idEmpresa;
+        if (activeCompanyId === idEmpresa) {
+          parsed.IDEmpresa = "emp-mock-1";
+          parsed.companyName = "Reparto Express Local";
+          localStorage.setItem("reparto_user_profile", JSON.stringify(parsed));
+          window.location.reload(); // reload to refresh context
+          return;
+        }
+      } catch {}
+    }
+
+    fetchSaCompanies();
+  };
+
+  const handleCreateBroker = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newBrokerName.trim() || !newBrokerEmail.trim() || !newBrokerPassword.trim()) {
+      setBrokerError("Por favor, llena los campos obligatorios (*).");
+      return;
+    }
+
+    setBrokerIsLoading(true);
+    setBrokerError("");
+    setBrokerMessage("");
+
+    try {
+      const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || "";
+      const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || "";
+      
+      const response = await fetch(`${supabaseUrl}/auth/v1/signup`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "apikey": supabaseAnonKey
+        },
+        body: JSON.stringify({
+          email: newBrokerEmail.trim().toLowerCase(),
+          password: newBrokerPassword
+        })
+      });
+
+      const resData = await response.json();
+      if (!response.ok) {
+        throw new Error(resData?.error_description || resData?.msg || "Error creando usuario en Auth");
+      }
+
+      const newUserId = resData?.user?.id;
+      if (!newUserId) throw new Error("No se devolvió ID del usuario");
+
+      // Insert into brokers table
+      const { error: brokerErr } = await supabase.from("brokers").insert({
+        id: newUserId,
+        name: newBrokerName.trim(),
+        email: newBrokerEmail.trim().toLowerCase(),
+        phone: newBrokerPhone.trim(),
+        empresas_asociadas: newBrokerCompanies
+      });
+
+      if (brokerErr) throw brokerErr;
+
+      // ALSO insert into users table so they can log in seamlessly
+      const { error: userErr } = await supabase.from("users").insert({
+        IDUser: newUserId,
+        name: newBrokerName.trim(),
+        mail: newBrokerEmail.trim().toLowerCase(),
+        Rol: "Broker",
+        phone: newBrokerPhone ? Number(newBrokerPhone) : null,
+        status: "active",
+        isAdmin: false,
+        superAdmin: false
+      });
+      
+      if (userErr) throw userErr;
+
+      await sendWelcomeEmail({
+        name: newBrokerName,
+        email: newBrokerEmail,
+        role: "Broker de Repartidores",
+        password: newBrokerPassword,
+        phone: newBrokerPhone
+      });
+
+      setBrokerMessage("Broker creado exitosamente.");
+      setNewBrokerName("");
+      setNewBrokerEmail("");
+      setNewBrokerPhone("");
+      setNewBrokerPassword("");
+      setNewBrokerCompanies([]);
+      fetchBrokers();
+
+    } catch (err: any) {
+      console.error(err);
+      setBrokerError(err.message || "Ocurrió un error al crear el Broker.");
+    } finally {
+      setBrokerIsLoading(false);
+    }
+  };
+
+  const handleCreateCompany = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!isSuperAdmin) {
+      setCompError("Acción no autorizada. Solo los SuperAdministradores pueden gestionar empresas.");
+      return;
+    }
+
+    const companyIdToUse = editingCompany ? editingCompany.idEmpresa : (newCompId || generateRandomCompanyId());
+
+    if (!companyIdToUse || !newCompName.trim() || !newCompOwner.trim() || !newCompEmail.trim() || !newCompUrl.trim()) {
+      setCompError("Por favor, llena todos los campos obligatorios (*).");
+      return;
+    }
+
+    if (!editingCompany && !newCompPassword.trim()) {
+      setCompError("Por favor, ingresa la contraseña para el primer usuario administrador.");
+      return;
+    }
+
+    if (!newCompLogoFile && !newCompLogoPreview) {
+      setCompError("Por favor, sube el logo de la empresa (máximo 1000x1000 px, cuadrado 1:1).");
+      return;
+    }
+
+    const cleanedPhones = newCompPhones.filter(phone => phone.trim() !== "");
+
+    setCompIsLoading(true);
+    setCompError("");
+    setCompMessage("");
+
+    // A. Create First Admin User in Supabase Auth if registering a new company
+    let firstAdminId = crypto.randomUUID();
+    let authSuccess = false;
+
+    if (!editingCompany) {
+      try {
+        const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || "";
+        const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || "";
+        
+        const response = await fetch(`${supabaseUrl}/auth/v1/signup`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "apikey": supabaseAnonKey
+          },
+          body: JSON.stringify({
+            email: newCompEmail.trim().toLowerCase(),
+            password: newCompPassword,
+            options: {
+              data: {
+                name: newCompOwner.trim(),
+                role: "Administrador"
+              }
+            }
+          })
+        });
+
+        const resData = await response.json();
+
+        if (response.ok && !resData.error && !resData.msg) {
+          const finalUserId = resData.id || resData.user?.id;
+          if (finalUserId) {
+            firstAdminId = finalUserId;
+            authSuccess = true;
+          }
+        } else {
+          let errorMsg = resData.msg || resData.message || resData.error?.message || resData.error_description || resData.error || "Unknown error";
+          if (errorMsg === "User already registered") {
+            errorMsg = "El correo del administrador ya está registrado en la plataforma.";
+          }
+          console.warn("Supabase Auth first admin user registration failed:", errorMsg);
+          setCompError(`Error al registrar el primer administrador: ${errorMsg}`);
+          setCompIsLoading(false);
+          return;
+        }
+      } catch (err: any) {
+        console.warn("Auth signup exception:", err);
+        setCompError(`Excepción al crear usuario administrador: ${err.message || err}`);
+        setCompIsLoading(false);
+        return;
+      }
+    }
+
+    let uploadedLogoUrl = newCompLogoPreview;
+    
+    if (newCompLogoFile) {
+      try {
+        const fileExt = newCompLogoFile.name.split('.').pop() || "png";
+        const fileName = `logos_empresas/${Date.now()}_${companyIdToUse}.${fileExt}`;
+        
+        const { data: uploadData, error: uploadErr } = await supabase.storage
+          .from("general")
+          .upload(fileName, newCompLogoFile, {
+            cacheControl: "3600",
+            upsert: false
+          });
+
+        if (uploadErr) {
+          throw uploadErr;
+        }
+
+        if (uploadData) {
+          const { data: urlData } = supabase.storage
+            .from("general")
+            .getPublicUrl(fileName);
+          uploadedLogoUrl = urlData.publicUrl;
+        }
+      } catch (err: any) {
+        console.warn("Storage upload failed, using preview base64 as fallback:", err);
+        uploadedLogoUrl = newCompLogoPreview;
+      }
+    }
+
+    const companyData = {
+      idEmpresa: companyIdToUse.trim(),
+      NombreEmpresa: newCompName.trim(),
+      Nombre_Empresa: newCompName.trim(),
+      PropietarioEmpresaNombre: newCompOwner.trim(),
+      mailEmpresa: newCompEmail.trim().toLowerCase(),
+      urlEmpresaUnico: newCompUrl.trim().toLowerCase(),
+      logoEmpresa: uploadedLogoUrl,
+      foto_empresa: uploadedLogoUrl,
+      TelefonosEmpresa: cleanedPhones,
+      DescripcionEmpresa: newCompDesc.trim(),
+      DireccionEmpresa: newCompAddress.trim(),
+      created_at: new Date().toISOString()
+    };
+
+    let processedInDb = false;
+
+    try {
+      if (editingCompany) {
+        const { error: dbErr } = await supabase
+          .from("Empresa")
+          .update({
+            NombreEmpresa: companyData.NombreEmpresa,
+            PropietarioEmpresaNombre: companyData.PropietarioEmpresaNombre,
+            mailEmpresa: companyData.mailEmpresa,
+            urlEmpresaUnico: companyData.urlEmpresaUnico,
+            logoEmpresa: companyData.logoEmpresa,
+            TelefonosEmpresa: companyData.TelefonosEmpresa,
+            DescripcionEmpresa: companyData.DescripcionEmpresa,
+            DireccionEmpresa: companyData.DireccionEmpresa
+          })
+          .eq("idEmpresa", companyIdToUse);
+
+        if (!dbErr) {
+          processedInDb = true;
+        } else {
+          console.warn("Database update failed: ", dbErr.message);
+          throw dbErr;
+        }
+      } else {
+        // Step 1: Insert new company
+        const { error: dbErr } = await supabase
+          .from("Empresa")
+          .insert({
+            idEmpresa: companyData.idEmpresa,
+            NombreEmpresa: companyData.NombreEmpresa,
+            PropietarioEmpresaNombre: companyData.PropietarioEmpresaNombre,
+            mailEmpresa: companyData.mailEmpresa,
+            urlEmpresaUnico: companyData.urlEmpresaUnico,
+            logoEmpresa: companyData.logoEmpresa,
+            TelefonosEmpresa: companyData.TelefonosEmpresa,
+            DescripcionEmpresa: companyData.DescripcionEmpresa,
+            DireccionEmpresa: companyData.DireccionEmpresa
+          });
+
+        if (dbErr) {
+          console.warn("Database insert failed: ", dbErr.message);
+          throw dbErr;
+        }
+
+        // Step 2: Insert the first admin user profile in public.users table (using upsert to avoid conflicts)
+        const phoneVal = cleanedPhones[0] ? Number(cleanedPhones[0].replace(/\D/g, '')) : null;
+        const newUserProfile = {
+          IDUser: firstAdminId,
+          name: newCompOwner.trim(),
+          mail: newCompEmail.trim().toLowerCase(),
+          isAdmin: true,
+          superAdmin: false,
+          Rol: "Administrador",
+          phone: phoneVal,
+          IDEmpresa: companyIdToUse.trim(),
+          foto: null,
+          Sucursales: [],
+          TipoVehiculo: null,
+          ModeloVehiculo: null,
+          Placas: null,
+          FotosDelVehiculo: []
+        };
+
+        const { error: userErr } = await supabase
+          .from("users")
+          .upsert(newUserProfile, { onConflict: "IDUser" });
+
+        if (userErr) {
+          console.warn("Saving company admin user profile failed: ", userErr.message);
+          throw userErr;
+        }
+
+        processedInDb = true;
+      }
+    } catch (err: any) {
+      console.warn("Offline/error saving company to database, saving local fallback:", err);
+    }
+
+    try {
+      const localCompanies = JSON.parse(localStorage.getItem("reparto_local_companies") || "[]");
+      if (editingCompany) {
+        const updatedLocal = localCompanies.map((c: any) => c.idEmpresa === companyIdToUse ? companyData : c);
+        if (!localCompanies.some((c: any) => c.idEmpresa === companyIdToUse)) {
+          updatedLocal.push(companyData);
+        }
+        localStorage.setItem("reparto_local_companies", JSON.stringify(updatedLocal));
+      } else {
+        localCompanies.push(companyData);
+        localStorage.setItem("reparto_local_companies", JSON.stringify(localCompanies));
+
+        // Save local backup for first admin
+        const localUsers = JSON.parse(localStorage.getItem("reparto_local_users") || "[]");
+        const phoneVal = cleanedPhones[0] ? Number(cleanedPhones[0].replace(/\D/g, '')) : null;
+        localUsers.push({
+          IDUser: firstAdminId,
+          name: newCompOwner.trim(),
+          mail: newCompEmail.trim().toLowerCase(),
+          password: newCompPassword.trim(),
+          isAdmin: true,
+          superAdmin: false,
+          Rol: "Administrador",
+          phone: phoneVal,
+          IDEmpresa: companyIdToUse.trim()
+        });
+        localStorage.setItem("reparto_local_users", JSON.stringify(localUsers));
+      }
+    } catch (e) {
+      console.error("Local storage error:", e);
+    }
+
+    setCompMessage(
+      editingCompany
+        ? (processedInDb ? "¡Empresa actualizada con éxito en la base de datos Supabase!" : "Empresa actualizada localmente.")
+        : (processedInDb ? "¡Empresa y primer usuario administrador creados con éxito!" : "Empresa y primer administrador creados localmente.")
+    );
+
+    resetCompanyForm();
+    fetchSaCompanies();
+  };
+
+  // ========== PAYMENT CONFIG FUNCTIONS ==========
+  const loadPaymentConfig = async () => {
+    setPayIsLoading(true);
+    setPayError("");
+    setPayMessage("");
+
+    try {
+      const { data, error } = await supabase
+        .from("Empresa")
+        .select("mp_public_key_test, mp_access_token_test, mp_public_key_prod, mp_access_token_prod, clip_api_key_test, clip_api_key_prod, payment_mode")
+        .eq("idEmpresa", currentCompanyId)
+        .maybeSingle();
+
+      if (!error && data) {
+        setPayMpPublicKeyTest(data.mp_public_key_test || "");
+        setPayMpAccessTokenTest(data.mp_access_token_test || "");
+        setPayMpPublicKeyProd(data.mp_public_key_prod || "");
+        setPayMpAccessTokenProd(data.mp_access_token_prod || "");
+        setPayClipApiKeyTest(data.clip_api_key_test || "");
+        setPayClipApiKeyProd(data.clip_api_key_prod || "");
+        setPaymentMode((data.payment_mode as "test" | "production") || "test");
+        setPayConfigLoaded(true);
+
+        // Cache in localStorage
+        localStorage.setItem(`reparto_payment_config_${currentCompanyId}`, JSON.stringify(data));
+      } else {
+        // Try localStorage fallback
+        const cached = localStorage.getItem(`reparto_payment_config_${currentCompanyId}`);
+        if (cached) {
+          const parsed = JSON.parse(cached);
+          setPayMpPublicKeyTest(parsed.mp_public_key_test || "");
+          setPayMpAccessTokenTest(parsed.mp_access_token_test || "");
+          setPayMpPublicKeyProd(parsed.mp_public_key_prod || "");
+          setPayMpAccessTokenProd(parsed.mp_access_token_prod || "");
+          setPayClipApiKeyTest(parsed.clip_api_key_test || "");
+          setPayClipApiKeyProd(parsed.clip_api_key_prod || "");
+          setPaymentMode((parsed.payment_mode as "test" | "production") || "test");
+        }
+        setPayConfigLoaded(true);
+      }
+    } catch (err) {
+      console.warn("Error loading payment config:", err);
+      // Try localStorage fallback
+      try {
+        const cached = localStorage.getItem(`reparto_payment_config_${currentCompanyId}`);
+        if (cached) {
+          const parsed = JSON.parse(cached);
+          setPayMpPublicKeyTest(parsed.mp_public_key_test || "");
+          setPayMpAccessTokenTest(parsed.mp_access_token_test || "");
+          setPayMpPublicKeyProd(parsed.mp_public_key_prod || "");
+          setPayMpAccessTokenProd(parsed.mp_access_token_prod || "");
+          setPayClipApiKeyTest(parsed.clip_api_key_test || "");
+          setPayClipApiKeyProd(parsed.clip_api_key_prod || "");
+          setPaymentMode((parsed.payment_mode as "test" | "production") || "test");
+        }
+      } catch {}
+      setPayConfigLoaded(true);
+    } finally {
+      setPayIsLoading(false);
+    }
+  };
+
+  const handleSavePaymentConfig = async () => {
+    setPayIsLoading(true);
+    setPayError("");
+    setPayMessage("");
+
+    const configData = {
+      mp_public_key_test: payMpPublicKeyTest.trim() || null,
+      mp_access_token_test: payMpAccessTokenTest.trim() || null,
+      mp_public_key_prod: payMpPublicKeyProd.trim() || null,
+      mp_access_token_prod: payMpAccessTokenProd.trim() || null,
+      clip_api_key_test: payClipApiKeyTest.trim() || null,
+      clip_api_key_prod: payClipApiKeyProd.trim() || null,
+      payment_mode: paymentMode
+    };
+
+    let savedInDb = false;
+
+    try {
+      const { error } = await supabase
+        .from("Empresa")
+        .update(configData)
+        .eq("idEmpresa", currentCompanyId);
+
+      if (!error) {
+        savedInDb = true;
+      } else {
+        console.warn("Error saving payment config to DB:", error.message);
+      }
+    } catch (err) {
+      console.warn("Exception saving payment config:", err);
+    }
+
+    // Always save to localStorage as backup
+    try {
+      localStorage.setItem(`reparto_payment_config_${currentCompanyId}`, JSON.stringify(configData));
+    } catch {}
+
+    setPayIsLoading(false);
+    setPayMessage(
+      savedInDb
+        ? "¡Configuración de pasarelas de pago guardada exitosamente en la base de datos!"
+        : "Configuración guardada localmente. Se sincronizará cuando haya conexión."
+    );
+
+    // Clear message after 5 seconds
+    setTimeout(() => {
+      setPayMessage("");
+    }, 5000);
+  };
+
+
+  return (
+    <div className={styles.dashboardWrapper}>
+      {/* Navigation Sidebar */}
+      <Sidebar activeTab={activeTab} setActiveTab={setActiveTab} onLogout={handleLogout} superAdmin={isSuperAdmin} isAdmin={isAdmin} />
+
+      {/* Main Panel Content */}
+      <div className={styles.mainContent}>
+        <Navbar activeTab={activeTab} />
+
+        <main className={styles.viewport}>
+          {/* TAB 1: OVERVIEW */}
+          {activeTab === "overview" && (
+            <>
+              {/* Statistics Grid */}
+              <div className={styles.overviewGrid}>
+                <StatsCard 
+                  title="Sucursales" 
+                  value={branches.length} 
+                  icon={Store} 
+                  color="#6366f1"
+                  footerText={`${branches.filter(b => b.status === "active").length} operativas en el sistema`}
+                />
+                <StatsCard 
+                  title="Miembros de Personal" 
+                  value={personnel.length} 
+                  icon={Users} 
+                  color="#06b6d4" 
+                  footerText="Staff y administradores registrados"
+                />
+                <StatsCard 
+                  title="Miembros Activos" 
+                  value={activeMembers} 
+                  icon={Activity} 
+                  color="#10b981"
+                  footerText={`${activeDrivers} conductores online / ${activeStaff} personal activo`}
+                />
+                <StatsCard 
+                  title="Visitas a la Plataforma" 
+                  value={platformVisits} 
+                  icon={Smartphone} 
+                  color="#a855f7"
+                  footerText="Total de accesos registrados"
+                />
+              </div>
+
+              {/* Lower Details Row */}
+              <div className={styles.overviewSection} style={{ gridTemplateColumns: '1fr' }}>
+                {/* Pedidos Recientes Feed log */}
+                <div className={`glass-panel ${styles.recentActivity}`} style={{ padding: "20px", display: "flex", flexDirection: "column", height: "100%", borderRadius: "var(--radius-lg)" }}>
+                  <div className={styles.sectionHeader}>
+                    <h2 className={styles.sectionTitle}>Pedidos Recientes</h2>
+                    <button
+                      type="button"
+                      onClick={() => setActiveTab("deliveries")}
+                      style={{
+                        background: 'var(--primary-glow)',
+                        border: '1px solid rgba(247, 52, 12, 0.15)',
+                        color: 'var(--primary)',
+                        padding: '6px 12px',
+                        borderRadius: 'var(--radius-md)',
+                        fontSize: '0.8rem',
+                        fontWeight: 600,
+                        cursor: 'pointer',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '6px',
+                        transition: 'all var(--transition-fast)'
+                      }}
+                    >
+                      <ClipboardList size={14} /> Ver Pedidos
+                    </button>
+                  </div>
+
+                  <div className={styles.scrollList} style={{ maxHeight: '500px' }}>
+                    {deliveries.length === 0 ? (
+                      <div style={{ padding: '20px', textAlign: 'center', color: 'var(--text-muted)', fontSize: '0.9rem' }}>
+                        No hay pedidos recientes registrados.
+                      </div>
+                    ) : (
+                      [...deliveries].reverse().slice(0, 15).map((del) => {
+                        const drv = drivers.find(d => d.id === del.driverId);
+                        
+                        let statusColor = "var(--warning)";
+                        let statusText = "Pendiente";
+                        
+                        if (del.status === "transit") {
+                          statusColor = "var(--primary)";
+                          statusText = "En Ruta";
+                        } else if (del.status === "assigned") {
+                          statusColor = "var(--primary)";
+                          statusText = "Asignado";
+                        } else if (del.status === "delivered") {
+                          statusColor = "var(--success)";
+                          statusText = "Entregado";
+                        } else if (del.status === "canceled") {
+                          statusColor = "var(--danger)";
+                          statusText = "Cancelado";
+                        }
+
+                        return (
+                          <div key={del.id} className={styles.activityItem} style={{ padding: '14px 16px' }}>
+                            <span className={styles.activityDot} style={{ background: statusColor, marginTop: '5px' }} />
+                            <div className={styles.activityInfo}>
+                              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                <span className={styles.activityText} style={{ fontSize: '0.9rem' }}>
+                                  Pedido para <strong>{del.customer}</strong>
+                                </span>
+                                <span style={{ 
+                                  fontSize: '0.7rem', 
+                                  fontWeight: 600, 
+                                  color: statusColor, 
+                                  background: `${statusColor}1A`,
+                                  padding: '2px 8px', 
+                                  borderRadius: '10px' 
+                                }}>
+                                  {statusText}
+                                </span>
+                              </div>
+                              <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', marginTop: '4px' }}>
+                                📍 {del.address}
+                              </div>
+                              {del.items && (
+                                <div style={{ fontSize: '0.78rem', color: 'var(--text-muted)', marginTop: '4px', fontStyle: 'italic' }}>
+                                  📦 {del.items}
+                                </div>
+                              )}
+                              <div className={styles.activityMeta} style={{ marginTop: '8px', borderTop: '1px solid rgba(255,255,255,0.03)', paddingTop: '6px' }}>
+                                <span>{drv ? `Repartidor: ${drv.name}` : 'Sin asignar'}</span>
+                                <span>{del.createdTime}</span>
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      })
+                    )}
+                  </div>
+                </div>
+              </div>
+            </>
+          )}
+
+          {/* TAB 2: GESTIONAR ORDENES */}
+          {activeTab === "deliveries" && (
+            <div className={styles.deliveriesGrid} style={{ gridTemplateColumns: '1fr' }}>
+              
+              {/* Single Column: Order List */}
+              <div className="glass-panel" style={{ padding: "24px", display: "flex", flexDirection: "column", height: "100%", borderRadius: "var(--radius-lg)", border: "1px solid var(--border-color)", background: "var(--bg-card)", overflow: "hidden" }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "16px", flexShrink: 0 }}>
+                  <h3 className={styles.sectionTitle} style={{ margin: 0 }}>Listado de Pedidos Reales (Supabase)</h3>
+                  
+                  {/* Category Filter */}
+                  <div className={styles.orderFilter} style={{ margin: 0, border: "none" }}>
+                    {(["all", "pending", "transit", "delivered"] as const).map((filter) => (
+                      <button
+                        key={filter}
+                        onClick={() => setOrderFilter(filter)}
+                        className={`${styles.filterBtn} ${orderFilter === filter ? styles.filterBtnActive : ""}`}
+                      >
+                        {filter === "all" ? "Todos" : filter === "pending" ? "Pendientes" : filter === "transit" ? "En Ruta" : "Completados"}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div className={styles.scrollList} style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', gridAutoRows: 'max-content', gap: '16px', overflowY: 'auto', flexGrow: 1, paddingRight: '4px' }}>
+                  {orders
+                    .filter(o => {
+                      if (orderFilter === "all") return true;
+                      if (orderFilter === "pending") return o.status === "creada" || o.status === "en_preparacion" || o.status === "lista";
+                      if (orderFilter === "transit") return o.status === "en_camino";
+                      if (orderFilter === "delivered") return o.status === "entregada" || o.status === "cancelada";
+                      return true;
+                    })
+                    .map((order) => {
+                      const isSelected = selectedOrderId === order.id;
+                      const orderItems = order.products.map(p => `${p.name} x${p.quantity}`).join(", ");
+                      const dateObj = new Date(order.createdAt);
+                      const formattedTime = isNaN(dateObj.getTime()) ? "" : dateObj.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+                      
+                      return (
+                        <div 
+                          key={order.id} 
+                          onClick={() => setSelectedOrderId(order.id)}
+                          className={`${styles.orderCard} ${isSelected ? styles.orderCardSelected : ""}`}
+                          style={{ margin: 0, height: 'fit-content', padding: '16px', display: 'flex', flexDirection: 'column', gap: '12px' }}
+                        >
+                          <div className={styles.cardHeader} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                            <div>
+                              <span className={styles.cardTitle} style={{ fontSize: '0.95rem', fontWeight: 700 }}>{order.customerName}</span>
+                              <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)', marginTop: '2px' }}>ID: {order.id}</div>
+                            </div>
+                            <span className={`${styles.badge} ${
+                              order.status === "creada" || order.status === "en_preparacion" || order.status === "lista"
+                                ? styles.badgePending 
+                                : order.status === "en_camino"
+                                  ? styles.badgeTransit 
+                                  : styles.badgeDelivered
+                            }`} style={order.status === "cancelada" ? { background: 'rgba(239,68,68,0.1)', color: '#ef4444', border: '1px solid rgba(239,68,68,0.2)' } : {}}>
+                              {order.status === "creada" ? "Creada" : 
+                               order.status === "en_preparacion" ? "En Preparación" : 
+                               order.status === "lista" ? "Lista" : 
+                               order.status === "en_camino" ? "En Camino" : 
+                               order.status === "entregada" ? "Entregada ✓" : "Cancelada ✕"}
+                            </span>
+                          </div>
+
+                          <div className={styles.cardDetails} style={{ fontSize: '0.8rem', display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                            <span>📍 <strong>Dirección:</strong> {order.address}</span>
+                            <span style={{ opacity: 0.9 }}>📦 <strong>Artículos:</strong> {orderItems}</span>
+                            <span style={{ color: 'var(--primary)', fontWeight: 'bold' }}>💰 <strong>Total:</strong> ${order.total.toFixed(2)}</span>
+                          </div>
+                          
+                          <div style={{ borderTop: '1px solid rgba(255,255,255,0.05)', paddingTop: '10px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '0.72rem', color: 'var(--text-muted)' }}>
+                              <span>Registrado: {formattedTime}</span>
+                              <span>Tipo: <strong style={{ color: 'var(--text-secondary)' }}>{order.tipoEntrega === 'a_domicilio' ? 'A Domicilio' : order.tipoEntrega === 'para_llevar' ? 'Para Llevar' : 'Comer Aquí'}</strong></span>
+                            </div>
+
+                            {/* Dropdowns for managing order repartidor & status */}
+                            <div style={{ display: 'flex', gap: '8px', marginTop: '4px' }}>
+                              {order.tipoEntrega === "a_domicilio" && (
+                                <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '3px' }}>
+                                  <label style={{ fontSize: '0.65rem', color: 'var(--text-muted)' }}>Repartidor</label>
+                                  <select
+                                    value={order.repartidorId || ""}
+                                    onChange={(e) => updateOrderDriver(order.id, e.target.value || null)}
+                                    className={styles.formInput}
+                                    style={{ padding: "4px 8px", fontSize: "0.72rem", height: "30px", background: 'var(--bg-secondary)', border: '1px solid var(--border-color)', color: 'var(--text-primary)', borderRadius: '6px', width: '100%' }}
+                                    onClick={(e) => e.stopPropagation()}
+                                  >
+                                    <option value="">Sin Asignar</option>
+                                    {personnel.filter(p => p.role === "Repartidor").map(d => (
+                                      <option key={d.id} value={d.id}>{d.name}</option>
+                                    ))}
+                                  </select>
+                                </div>
+                              )}
+
+                              <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '3px' }}>
+                                <label style={{ fontSize: '0.65rem', color: 'var(--text-muted)' }}>Estado</label>
+                                <select
+                                  value={order.status}
+                                  onChange={(e) => updateOrderStatus(order.id, e.target.value as Order['status'])}
+                                  className={styles.formInput}
+                                  style={{ padding: "4px 8px", fontSize: "0.72rem", height: "30px", background: 'var(--bg-secondary)', border: '1px solid var(--border-color)', color: 'var(--text-primary)', borderRadius: '6px', width: '100%' }}
+                                  onClick={(e) => e.stopPropagation()}
+                                >
+                                  <option value="creada">Creada</option>
+                                  <option value="en_preparacion">En Preparación</option>
+                                  <option value="lista">Lista</option>
+                                  <option value="en_camino">En Camino</option>
+                                  <option value="entregada">Entregada</option>
+                                  <option value="cancelada">Cancelada</option>
+                                </select>
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+
+                  {orders.filter(o => {
+                    if (orderFilter === "all") return true;
+                    if (orderFilter === "pending") return o.status === "creada" || o.status === "en_preparacion" || o.status === "lista";
+                    if (orderFilter === "transit") return o.status === "en_camino";
+                    if (orderFilter === "delivered") return o.status === "entregada" || o.status === "cancelada";
+                    return true;
+                  }).length === 0 && (
+                    <div style={{ gridColumn: '1 / -1', textAlign: "center", color: "var(--text-muted)", padding: "40px 20px", fontSize: "0.85rem" }}>
+                      No hay pedidos en esta categoría.
+                    </div>
+                  )}
+                </div>
+              </div>
+
+            </div>
+          )}
+
+          {/* TAB 3: GESTIONAR CONDUCTORES */}
+          {activeTab === "drivers" && (
+            <div className={styles.deliveriesGrid}>
+              
+              {/* Left Panel: Driver list / connection status */}
+              <div className={`glass-panel ${styles.listPanel}`} style={{ borderRadius: "var(--radius-lg)", padding: "24px", display: "flex", flexDirection: "column", gap: "20px" }}>
+                <div className={styles.sectionHeader} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", borderBottom: "1px solid var(--border-color)", paddingBottom: "12px" }}>
+                  <h3 className={styles.sectionTitle} style={{ margin: 0, display: "flex", alignItems: "center", gap: "8px" }}>
+                    <Truck size={18} /> Repartidores Activos
+                  </h3>
+                  <span className={styles.badge} style={{ background: 'rgba(239, 68, 68, 0.1)', color: 'var(--danger)', fontSize: '0.8rem', padding: '4px 10px', borderRadius: "var(--radius-sm)", fontWeight: 600 }}>
+                    0 conectados
+                  </span>
+                </div>
+
+                <div style={{
+                  display: "flex",
+                  flexDirection: "column",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  gap: "16px",
+                  textAlign: "center",
+                  flexGrow: 1,
+                  padding: "20px",
+                  border: "1px dashed var(--border-color)",
+                  borderRadius: "var(--radius-md)",
+                  background: "rgba(255,255,255,0.01)"
+                }}>
+                  <div style={{
+                    width: "48px",
+                    height: "48px",
+                    borderRadius: "50%",
+                    background: "rgba(255,255,255,0.02)",
+                    border: "1px solid var(--border-color)",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    color: "var(--text-muted)",
+                    boxShadow: "var(--shadow-sm)"
+                  }}>
+                    <Truck size={24} style={{ opacity: 0.5 }} />
+                  </div>
+                  <div>
+                    <h4 style={{ fontSize: "0.95rem", fontWeight: 600, color: "var(--text-primary)", marginBottom: "6px" }}>
+                      Sin Conexiones Activas
+                    </h4>
+                    <p style={{ fontSize: "0.8rem", color: "var(--text-muted)", lineHeight: "1.4" }}>
+                      Por el momento no hay conductores conectados. Los repartidores aparecerán aquí y en el mapa cuando se pongan en línea en su aplicación móvil.
+                    </p>
+                  </div>
+                </div>
+              </div>
+
+              {/* Right Panel: Mapbox/Leaflet Map */}
+              <div className="glass-panel" style={{ position: "relative", height: "100%", borderRadius: "var(--radius-lg)", overflow: "hidden", border: "1px solid var(--border-color)" }}>
+                <MapContainer />
+              </div>
+
+            </div>
+          )}
+
+          {/* TAB 3.5: GESTIONAR ORDENES */}
+          {activeTab === "orders" && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '16px', height: 'calc(100vh - var(--navbar-height) - 48px)' }}>
+              
+              {/* Outer Sub-tabs */}
+              <div style={{ display: 'flex', gap: '12px', borderBottom: '1px solid rgba(255,255,255,0.08)', paddingBottom: '10px', flexShrink: 0 }}>
+                <button
+                  type="button"
+                  onClick={() => setOrdersSubTab("pos")}
+                  style={{
+                    padding: '8px 16px',
+                    borderRadius: '8px',
+                    border: 'none',
+                    background: ordersSubTab === "pos" ? 'var(--primary)' : 'rgba(255,255,255,0.02)',
+                    color: ordersSubTab === "pos" ? 'white' : 'var(--text-secondary)',
+                    fontWeight: 600,
+                    cursor: 'pointer',
+                    fontSize: '0.82rem',
+                    transition: 'all 0.2s',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '6px'
+                  }}
+                >
+                  <Store size={15} /> Punto de Venta (POS)
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setOrdersSubTab("monitor")}
+                  style={{
+                    padding: '8px 16px',
+                    borderRadius: '8px',
+                    border: 'none',
+                    background: ordersSubTab === "monitor" ? 'var(--primary)' : 'rgba(255,255,255,0.02)',
+                    color: ordersSubTab === "monitor" ? 'white' : 'var(--text-secondary)',
+                    fontWeight: 600,
+                    cursor: 'pointer',
+                    fontSize: '0.82rem',
+                    transition: 'all 0.2s',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '6px'
+                  }}
+                >
+                  <ClipboardList size={15} /> Monitoreo y Mapa
+                </button>
+              </div>
+
+              {/* POS Sub-tab View */}
+              {ordersSubTab === "pos" ? (
+                <div style={{
+                  display: 'grid',
+                  gridTemplateColumns: '1fr 380px',
+                  gap: '20px',
+                  flexGrow: 1,
+                  overflow: 'hidden',
+                  minHeight: 0
+                }}>
+                  {/* Left Side: Product Selector & Checkout Tab Content */}
+                  <div className="glass-panel" style={{
+                    borderRadius: 'var(--radius-lg)',
+                    padding: '20px',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    overflow: 'hidden',
+                    minHeight: 0
+                  }}>
+                    {/* Inner POS Sub-tabs */}
+                    <div style={{ display: 'flex', gap: '10px', marginBottom: '20px', borderBottom: '1px solid rgba(255,255,255,0.06)', paddingBottom: '10px', flexShrink: 0 }}>
+                      <button
+                        type="button"
+                        onClick={() => setPosSubTab("menu")}
+                        style={{
+                          padding: '6px 14px',
+                          borderRadius: '6px',
+                          border: 'none',
+                          background: posSubTab === "menu" ? 'rgba(247, 52, 12, 0.08)' : 'transparent',
+                          color: posSubTab === "menu" ? 'var(--primary)' : 'var(--text-secondary)',
+                          fontWeight: 600,
+                          cursor: 'pointer',
+                          fontSize: '0.82rem',
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: '6px'
+                        }}
+                      >
+                        🍕 Menú de Ventas
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (orderSelectedProducts.length > 0) {
+                            setPosSubTab("checkout");
+                          } else {
+                            alert("Por favor agrega productos al carrito antes de proceder.");
+                          }
+                        }}
+                        disabled={orderSelectedProducts.length === 0}
+                        style={{
+                          padding: '6px 14px',
+                          borderRadius: '6px',
+                          border: 'none',
+                          background: posSubTab === "checkout" ? 'rgba(247, 52, 12, 0.08)' : 'transparent',
+                          color: posSubTab === "checkout" ? 'var(--primary)' : 'var(--text-secondary)',
+                          fontWeight: 600,
+                          cursor: 'pointer',
+                          fontSize: '0.82rem',
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: '6px',
+                          opacity: orderSelectedProducts.length === 0 ? 0.4 : 1
+                        }}
+                      >
+                        📦 Cerrar la venta
+                      </button>
+                    </div>
+
+                    {posSubTab === "menu" ? (
+                      /* MENU TAB CONTENT */
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '16px', flexGrow: 1, overflow: 'hidden', minHeight: 0 }}>
+                        {/* Search and Category Filters Row */}
+                        <div style={{ display: 'flex', gap: '12px', alignItems: 'center', flexShrink: 0, flexWrap: 'wrap' }}>
+                          <input
+                            type="text"
+                            placeholder="Buscar platillo, bebida, snacks o categoría..."
+                            className={styles.formInput}
+                            style={{ flexGrow: 1, margin: 0 }}
+                            value={productSearchQuery}
+                            onChange={(e) => setProductSearchQuery(e.target.value)}
+                          />
+                          <div style={{ display: 'flex', gap: '6px' }}>
+                            {["Todos", "Comida", "Bebidas", "Postres", "Otros"].map(cat => (
+                              <button
+                                key={cat}
+                                type="button"
+                                onClick={() => setSelectedProductCategory(cat)}
+                                style={{
+                                  padding: '8px 12px',
+                                  borderRadius: '20px',
+                                  border: '1px solid var(--border-color)',
+                                  background: selectedProductCategory === cat ? 'var(--primary)' : 'rgba(255,255,255,0.02)',
+                                  color: selectedProductCategory === cat ? 'white' : 'var(--text-secondary)',
+                                  fontSize: '0.75rem',
+                                  fontWeight: 600,
+                                  cursor: 'pointer',
+                                  transition: 'all 0.2s'
+                                }}
+                              >
+                                {cat}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+
+                        {/* Products Grid list */}
+                        <div style={{
+                          flexGrow: 1,
+                          overflowY: 'auto',
+                          display: 'grid',
+                          gridTemplateColumns: 'repeat(auto-fill, minmax(160px, 1fr))',
+                          gap: '16px',
+                          paddingRight: '6px',
+                          minHeight: 0
+                        }}>
+                          {products
+                            .filter(p => {
+                              const matchSearch = p.name.toLowerCase().includes(productSearchQuery.toLowerCase()) ||
+                                (p.description || "").toLowerCase().includes(productSearchQuery.toLowerCase()) ||
+                                p.category.toLowerCase().includes(productSearchQuery.toLowerCase());
+                              const matchCat = selectedProductCategory === "Todos" || p.category === selectedProductCategory;
+                              return matchSearch && matchCat;
+                            })
+                            .map(p => {
+                              const firstPhoto = p.fotos && p.fotos[0];
+                              const qtyInCart = orderSelectedProducts.find(item => item.id === p.id)?.quantity || 0;
+                              return (
+                                <div
+                                  key={p.id}
+                                  onClick={() => {
+                                    setOrderSelectedProducts((prev) => {
+                                      const existing = prev.find(item => item.id === p.id);
+                                      if (existing) {
+                                        return prev.map(item => item.id === p.id ? { ...item, quantity: item.quantity + 1 } : item);
+                                      }
+                                      return [...prev, { id: p.id, name: p.name, quantity: 1, price: p.price }];
+                                    });
+                                  }}
+                                  style={{
+                                    border: '1px solid rgba(255,255,255,0.08)',
+                                    borderRadius: '12px',
+                                    background: 'rgba(255,255,255,0.02)',
+                                    overflow: 'hidden',
+                                    cursor: 'pointer',
+                                    transition: 'all 0.2s',
+                                    position: 'relative',
+                                    display: 'flex',
+                                    flexDirection: 'column',
+                                    height: '210px'
+                                  }}
+                                  onMouseEnter={(e) => {
+                                    e.currentTarget.style.borderColor = 'var(--primary)';
+                                    e.currentTarget.style.transform = 'translateY(-2px)';
+                                    e.currentTarget.style.background = 'rgba(255,255,255,0.04)';
+                                  }}
+                                  onMouseLeave={(e) => {
+                                    e.currentTarget.style.borderColor = 'rgba(255,255,255,0.08)';
+                                    e.currentTarget.style.transform = 'none';
+                                    e.currentTarget.style.background = 'rgba(255,255,255,0.02)';
+                                  }}
+                                >
+                                  {qtyInCart > 0 && (
+                                    <div style={{
+                                      position: 'absolute',
+                                      top: '8px',
+                                      right: '8px',
+                                      background: 'var(--primary)',
+                                      color: 'white',
+                                      borderRadius: '50%',
+                                      width: '22px',
+                                      height: '22px',
+                                      display: 'flex',
+                                      alignItems: 'center',
+                                      justifyContent: 'center',
+                                      fontSize: '0.72rem',
+                                      fontWeight: 'bold',
+                                      zIndex: 10
+                                    }}>
+                                      {qtyInCart}
+                                    </div>
+                                  )}
+                                  <div style={{ width: '100%', height: '110px', background: 'rgba(255,255,255,0.04)', display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden' }}>
+                                    {firstPhoto ? (
+                                      <img src={firstPhoto} alt={p.name} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                                    ) : (
+                                      <Package size={32} style={{ color: 'var(--text-muted)' }} />
+                                    )}
+                                  </div>
+                                  <div style={{ padding: '10px', display: 'flex', flexDirection: 'column', flexGrow: 1, justifyContent: 'space-between' }}>
+                                    <div>
+                                      <h4 style={{ margin: 0, fontSize: '0.82rem', fontWeight: 600, color: 'var(--text-primary)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{p.name}</h4>
+                                      <p style={{ margin: '4px 0 0 0', fontSize: '0.7rem', color: 'var(--text-muted)', height: '28px', overflow: 'hidden', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical' }}>{p.description || 'Sin descripción'}</p>
+                                    </div>
+                                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '4px' }}>
+                                      <span style={{ fontSize: '0.85rem', fontWeight: 'bold', color: 'var(--success)' }}>${p.price.toFixed(2)}</span>
+                                      <span style={{ fontSize: '0.7rem', color: 'var(--primary)', fontWeight: 600 }}>Agregar +</span>
+                                    </div>
+                                  </div>
+                                </div>
+                              );
+                            })}
+                        </div>
+                      </div>
+                    ) : (
+                      /* CHECKOUT / CERRAR VENTA TAB CONTENT */
+                      <form onSubmit={handleCreateOrderForm} style={{ display: 'flex', flexDirection: 'column', gap: '16px', overflowY: 'auto', flexGrow: 1, paddingRight: '4px', minHeight: 0 }}>
+                        {/* 1. Tipo de Venta horizontal select row */}
+                        <div className={styles.formGroup}>
+                          <label className={styles.inputLabel}>Selecciona el Tipo de Venta</label>
+                          <div style={{
+                            display: 'grid',
+                            gridTemplateColumns: 'repeat(3, 1fr)',
+                            gap: '8px',
+                            marginTop: '6px'
+                          }}>
+                            {[
+                              { id: 'para_comer_aqui', label: 'Para comer aquí', icon: Store },
+                              { id: 'para_llevar', label: 'Para llevar', icon: Package },
+                              { id: 'a_domicilio', label: 'A domicilio', icon: Truck }
+                            ].map(option => {
+                              const IconComp = option.icon;
+                              const isSelected = orderTipoEntrega === option.id;
+                              return (
+                                <button
+                                  key={option.id}
+                                  type="button"
+                                  onClick={() => {
+                                    setOrderTipoEntrega(option.id as any);
+                                    if (option.id !== 'a_domicilio') {
+                                      setOrderRepartidorId('');
+                                    }
+                                  }}
+                                  style={{
+                                    display: 'flex',
+                                    flexDirection: 'column',
+                                    alignItems: 'center',
+                                    justifyContent: 'center',
+                                    gap: '6px',
+                                    padding: '12px 4px',
+                                    borderRadius: '8px',
+                                    border: isSelected ? '2px solid var(--primary)' : '1px solid rgba(255,255,255,0.08)',
+                                    background: isSelected ? 'rgba(247, 52, 12, 0.08)' : 'rgba(255,255,255,0.02)',
+                                    color: isSelected ? 'var(--primary)' : 'var(--text-secondary)',
+                                    cursor: 'pointer',
+                                    fontSize: '0.72rem',
+                                    fontWeight: 600,
+                                    transition: 'all 0.2s'
+                                  }}
+                                >
+                                  <IconComp size={18} />
+                                  <span>{option.label}</span>
+                                </button>
+                              );
+                            })}
+                          </div>
+                        </div>
+
+                        {/* 2. Dirección de Entrega (Mapbox Autocomplete) */}
+                        {orderTipoEntrega === "a_domicilio" ? (
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: '14px', background: 'rgba(255,255,255,0.01)', border: '1px solid rgba(255,255,255,0.05)', padding: '16px', borderRadius: '8px' }}>
+                            <div className={styles.formGroup} style={{ position: 'relative' }}>
+                              <label className={styles.inputLabel}>Dirección de Entrega *</label>
+                              <input
+                                type="text"
+                                required
+                                placeholder="Escribe la dirección para buscar..."
+                                className={styles.formInput}
+                                value={orderAddress}
+                                onChange={(e) => setOrderAddress(e.target.value)}
+                                onFocus={() => setShowSuggestions(true)}
+                                onBlur={() => setTimeout(() => setShowSuggestions(false), 250)}
+                              />
+                              {isLoadingSuggestions && (
+                                <div style={{ position: 'absolute', right: '12px', top: '35px', fontSize: '0.7rem', color: 'var(--primary)' }}>
+                                  Buscando...
+                                </div>
+                              )}
+                              {showSuggestions && addressSuggestions.length > 0 && (
+                                <ul style={{
+                                  position: 'absolute',
+                                  top: '100%',
+                                  left: 0,
+                                  right: 0,
+                                  background: 'var(--bg-card)',
+                                  border: '1px solid var(--border-color)',
+                                  borderRadius: 'var(--radius-md)',
+                                  boxShadow: '0 10px 25px rgba(0, 0, 0, 0.4)',
+                                  zIndex: 100,
+                                  listStyle: 'none',
+                                  padding: '4px 0',
+                                  margin: '4px 0 0 0',
+                                  maxHeight: '180px',
+                                  overflowY: 'auto'
+                                }}>
+                                  {addressSuggestions.map((s, idx) => (
+                                    <li 
+                                      key={idx}
+                                      onMouseDown={() => {
+                                        addressSelectedFromListRef.current = true;
+                                        setOrderAddress(s.place_name);
+                                        setOrderLat(s.center[1]);
+                                        setOrderLng(s.center[0]);
+                                        setShowSuggestions(false);
+                                      }}
+                                      style={{
+                                        padding: '8px 12px',
+                                        fontSize: '0.8rem',
+                                        color: 'var(--text-primary)',
+                                        cursor: 'pointer',
+                                        borderBottom: idx < addressSuggestions.length - 1 ? '1px solid rgba(255,255,255,0.03)' : 'none',
+                                        transition: 'background 0.2s'
+                                      }}
+                                      onMouseEnter={(e) => e.currentTarget.style.background = 'rgba(255,255,255,0.05)'}
+                                      onMouseLeave={(e) => e.currentTarget.style.background = ''}
+                                    >
+                                      📍 {s.place_name}
+                                    </li>
+                                  ))}
+                                </ul>
+                              )}
+                            </div>
+
+                            <div className={styles.formGroup}>
+                              <label className={styles.inputLabel}>Asignar Repartidor</label>
+                              <select
+                                className={styles.formInput}
+                                value={orderRepartidorId}
+                                onChange={(e) => setOrderRepartidorId(e.target.value)}
+                                style={{ color: "var(--text-primary)" }}
+                              >
+                                <option value="">Sin Asignar (Despachar después)</option>
+                                {personnel.filter(p => p.role === "Repartidor").map(d => (
+                                  <option key={d.id} value={d.id}>{d.name}</option>
+                                ))}
+                              </select>
+                            </div>
+                          </div>
+                        ) : null}
+
+                        {/* 3. Información del Cliente */}
+                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
+                          <div className={styles.formGroup}>
+                            <label className={styles.inputLabel}>Nombre del Cliente *</label>
+                            <input
+                              type="text"
+                              required
+                              placeholder="Ej. Juan Pérez"
+                              className={styles.formInput}
+                              value={orderCustomerName}
+                              onChange={(e) => setOrderCustomerName(e.target.value)}
+                            />
+                          </div>
+                          <div className={styles.formGroup}>
+                            <label className={styles.inputLabel}>Teléfono (Opcional)</label>
+                            <input
+                              type="text"
+                              placeholder="Ej. 8112345678"
+                              className={styles.formInput}
+                              value={orderPhone}
+                              onChange={(e) => setOrderPhone(e.target.value)}
+                            />
+                          </div>
+                        </div>
+
+                        <div className={styles.formGroup}>
+                          <label className={styles.inputLabel}>Sucursal de Origen</label>
+                          <select
+                            required
+                            className={styles.formInput}
+                            value={orderBranchId}
+                            onChange={(e) => setOrderBranchId(e.target.value)}
+                            style={{ color: "var(--text-primary)" }}
+                          >
+                            <option value="" disabled>Selecciona la sucursal de origen...</option>
+                            {branches.map(b => (
+                              <option key={b.id} value={b.id}>{b.name}</option>
+                            ))}
+                          </select>
+                        </div>
+
+                        {/* Map and Route Distance Details */}
+                        {(() => {
+                          const selectedBranch = branches.find(b => b.id === orderBranchId);
+                          const hasBranchCoords = selectedBranch && selectedBranch.lat !== null && selectedBranch.lat !== undefined && selectedBranch.lng !== null && selectedBranch.lng !== undefined;
+                          const showMap = orderTipoEntrega === "a_domicilio" && orderLat !== null && orderLng !== null && hasBranchCoords;
+
+                          if (!showMap) {
+                            if (orderTipoEntrega === "a_domicilio") {
+                              if (orderAddress.trim().length > 3 && (orderLat === null || orderLng === null)) {
+                                return (
+                                  <div style={{
+                                    margin: '12px 0',
+                                    padding: '12px',
+                                    background: 'rgba(99, 102, 241, 0.08)',
+                                    border: '1px solid rgba(99, 102, 241, 0.2)',
+                                    borderRadius: '8px',
+                                    color: '#818cf8',
+                                    fontSize: '0.8rem',
+                                    lineHeight: '1.4'
+                                  }}>
+                                    💡 <strong>Consejo:</strong> Asegúrate de hacer clic en una dirección de la lista desplegable de sugerencias de Mapbox para obtener las coordenadas y calcular la ruta.
+                                  </div>
+                                );
+                              }
+                              if (orderLat !== null && orderLng !== null && selectedBranch && !hasBranchCoords) {
+                                return (
+                                  <div style={{
+                                    margin: '12px 0',
+                                    padding: '12px',
+                                    background: 'rgba(239, 68, 68, 0.08)',
+                                    border: '1px solid rgba(239, 68, 68, 0.2)',
+                                    borderRadius: '8px',
+                                    color: '#ef4444',
+                                    fontSize: '0.8rem',
+                                    lineHeight: '1.4'
+                                  }}>
+                                    ⚠️ <strong>Coordenadas faltantes:</strong> La sucursal seleccionada ("{selectedBranch.name}") no tiene asignada una ubicación geográfica. Edítala en la pestaña "Gestionar Sucursales" para configurar su dirección y poder calcular la ruta y costo de envío.
+                                  </div>
+                                );
+                              }
+                            }
+                            return null;
+                          }
+
+                          return (
+                            <div style={{
+                              margin: '16px 0',
+                              padding: '16px',
+                              background: 'rgba(255, 255, 255, 0.02)',
+                              border: '1px solid rgba(255, 255, 255, 0.08)',
+                              borderRadius: '8px',
+                              display: 'flex',
+                              flexDirection: 'column',
+                              gap: '12px'
+                            }}>
+                              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                <span style={{ fontSize: '0.85rem', fontWeight: 600, color: 'var(--text-secondary)' }}>
+                                  Ruta de Entrega
+                                </span>
+                                {isCalculatingRoute ? (
+                                  <span style={{ fontSize: '0.75rem', color: 'var(--primary)', animation: 'pulse 1.5s infinite' }}>
+                                    Calculando ruta...
+                                  </span>
+                                ) : (
+                                  <span style={{ fontSize: '0.75rem', color: 'var(--success)', fontWeight: 'bold' }}>
+                                    {routeDistance ? `${routeDistance.toFixed(2)} km` : 'Calculando...'}
+                                  </span>
+                                )}
+                              </div>
+
+                              <OrderRouteMap
+                                start={[selectedBranch!.lat!, selectedBranch!.lng!]}
+                                end={[orderLat!, orderLng!]}
+                                routeCoordinates={routeCoordinates}
+                              />
+
+                              <div style={{
+                                display: 'flex',
+                                justifyContent: 'space-between',
+                                alignItems: 'center',
+                                padding: '8px 12px',
+                                background: 'rgba(99, 102, 241, 0.05)',
+                                border: '1px solid rgba(99, 102, 241, 0.15)',
+                                borderRadius: '6px'
+                              }}>
+                                <span style={{ fontSize: '0.78rem', color: 'var(--text-secondary)' }}>Costo de Envío:</span>
+                                <span style={{ fontSize: '0.85rem', fontWeight: 'bold', color: 'var(--primary)' }}>
+                                  ${orderShippingCost.toFixed(2)}
+                                </span>
+                              </div>
+                            </div>
+                          );
+                        })()}
+
+                        <button type="submit" className={styles.formBtn} style={{ marginTop: '10px' }}>
+                          CONFIRMAR Y CREAR ORDEN (${finalOrderTotal.toFixed(2)})
+                        </button>
+                      </form>
+                    )}
+                  </div>
+
+                  {/* Right Side: Cart / Resumen Sidebar Panel */}
+                  <div className="glass-panel" style={{
+                    borderRadius: 'var(--radius-lg)',
+                    padding: '20px',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    overflow: 'hidden',
+                    height: '100%',
+                    minHeight: 0
+                  }}>
+                    <div style={{ display: 'flex', justifySelf: 'stretch', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px', flexShrink: 0 }}>
+                      <h3 className={styles.sectionTitle} style={{ margin: 0 }}>Resumen</h3>
+                      {orderSelectedProducts.length > 0 && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (confirm("¿Limpiar todo el carrito?")) {
+                              setOrderSelectedProducts([]);
+                            }
+                          }}
+                          style={{ background: 'none', border: 'none', color: 'var(--danger)', cursor: 'pointer', display: 'flex', alignItems: 'center' }}
+                          title="Vaciar Carrito"
+                        >
+                          <Trash2 size={18} />
+                        </button>
+                      )}
+                    </div>
+
+                    <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginBottom: '12px', display: 'block', flexShrink: 0 }}>
+                      {orderTipoEntrega === 'a_domicilio' ? 'A domicilio' :
+                       orderTipoEntrega === 'para_comer_aqui' ? 'Para comer aquí' :
+                       'Para llevar'}
+                    </span>
+
+                    {/* Cart Items List */}
+                    <div style={{ flexGrow: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '10px', paddingRight: '4px', minHeight: 0 }}>
+                      {orderSelectedProducts.length > 0 ? (
+                        orderSelectedProducts.map((p, idx) => (
+                          <div key={idx} style={{
+                            display: 'flex',
+                            justifyContent: 'space-between',
+                            alignItems: 'center',
+                            padding: '8px 12px',
+                            background: 'rgba(255,255,255,0.02)',
+                            borderRadius: '8px',
+                            border: '1px solid rgba(255,255,255,0.04)',
+                            flexShrink: 0
+                          }}>
+                            <div>
+                              <div style={{ fontSize: '0.82rem', fontWeight: 600, color: 'var(--text-primary)' }}>{p.name}</div>
+                              <div style={{ fontSize: '0.72rem', color: 'var(--success)', fontWeight: 'bold' }}>${p.price.toFixed(2)} c/u</div>
+                            </div>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                              <div style={{ display: 'flex', alignItems: 'center', background: 'rgba(0,0,0,0.2)', borderRadius: '6px', border: '1px solid rgba(255,255,255,0.06)' }}>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setOrderSelectedProducts(prev => {
+                                      const existing = prev.find(item => item.id === p.id);
+                                      if (existing && existing.quantity > 1) {
+                                        return prev.map(item => item.id === p.id ? { ...item, quantity: item.quantity - 1 } : item);
+                                      }
+                                      return prev.filter(item => item.id !== p.id);
+                                    });
+                                  }}
+                                  style={{ background: 'none', border: 'none', color: 'white', padding: '4px 8px', cursor: 'pointer', fontSize: '0.8rem' }}
+                                >
+                                  -
+                                </button>
+                                <span style={{ fontSize: '0.8rem', fontWeight: 600, color: 'white', padding: '0 4px' }}>{p.quantity}</span>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setOrderSelectedProducts(prev => prev.map(item => item.id === p.id ? { ...item, quantity: item.quantity + 1 } : item));
+                                  }}
+                                  style={{ background: 'none', border: 'none', color: 'white', padding: '4px 8px', cursor: 'pointer', fontSize: '0.8rem' }}
+                                >
+                                  +
+                                </button>
+                              </div>
+                              <button
+                                type="button"
+                                onClick={() => setOrderSelectedProducts(prev => prev.filter(item => item.id !== p.id))}
+                                style={{ color: 'var(--danger)', background: 'none', border: 'none', cursor: 'pointer', padding: '4px' }}
+                              >
+                                ✕
+                              </button>
+                            </div>
+                          </div>
+                        ))
+                      ) : (
+                        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', flexGrow: 1, gap: '10px', opacity: 0.4 }}>
+                          <Package size={44} />
+                          <span style={{ fontSize: '0.82rem' }}>Cesta vacía</span>
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Cart Footer */}
+                    <div style={{ borderTop: '1px solid rgba(255,255,255,0.08)', paddingTop: '14px', marginTop: '14px', flexShrink: 0 }}>
+                      {orderTipoEntrega === "a_domicilio" && orderShippingCost > 0 && (
+                        <>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '0.85rem', color: 'var(--text-secondary)', marginBottom: '6px' }}>
+                            <span>Subtotal Productos</span>
+                            <span>${calculatedOrderTotal.toFixed(2)}</span>
+                          </div>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '0.85rem', color: 'var(--text-secondary)', marginBottom: '12px' }}>
+                            <span>Costo de Envío {routeDistance ? `(${routeDistance.toFixed(2)} km)` : ""}</span>
+                            <span style={{ color: 'var(--success)' }}>+${orderShippingCost.toFixed(2)}</span>
+                          </div>
+                        </>
+                      )}
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontWeight: 'bold', fontSize: '1.05rem', marginBottom: '16px' }}>
+                        <span>TOTAL</span>
+                        <span style={{ color: 'var(--primary)' }}>${finalOrderTotal.toFixed(2)}</span>
+                      </div>
+
+                      {posSubTab === "menu" ? (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (orderSelectedProducts.length > 0) {
+                              setPosSubTab("checkout");
+                            }
+                          }}
+                          disabled={orderSelectedProducts.length === 0}
+                          className={styles.formBtn}
+                          style={{
+                            width: '100%',
+                            background: orderSelectedProducts.length > 0 ? 'var(--primary)' : 'rgba(255,255,255,0.05)',
+                            color: orderSelectedProducts.length > 0 ? 'white' : 'var(--text-muted)',
+                            opacity: orderSelectedProducts.length > 0 ? 1 : 0.5,
+                            cursor: orderSelectedProducts.length > 0 ? 'pointer' : 'not-allowed'
+                          }}
+                        >
+                          {orderSelectedProducts.length > 0 ? "CONTINUAR AL PAGO / COBRO" : "INGRESE ARTÍCULOS"}
+                        </button>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => setPosSubTab("menu")}
+                          className={styles.formBtn}
+                          style={{ width: '100%', background: 'rgba(255,255,255,0.05)', color: 'white', border: '1px solid rgba(255,255,255,0.1)' }}
+                        >
+                          VOLVER AL MENÚ
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              ) : (
+                /* MONITOR SUB-TAB VIEW (Live Orders list & Map tracking side-by-side) */
+                <div style={{
+                  display: 'grid',
+                  gridTemplateColumns: '1.2fr 1fr',
+                  gap: '20px',
+                  flexGrow: 1,
+                  overflow: 'hidden',
+                  minHeight: 0
+                }}>
+                  {/* Orders List Table */}
+                  <div className={`glass-panel ${styles.listPanel}`} style={{ borderRadius: 'var(--radius-lg)', height: '100%', margin: 0, padding: '20px', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+                    <div className={styles.sectionHeader}>
+                      <h2 className={styles.sectionTitle}>Órdenes Recientes</h2>
+                      <span className={styles.badge} style={{ background: 'var(--primary-glow)', color: 'var(--primary)', fontSize: '0.85rem', padding: '4px 10px' }}>
+                        {orders.length} órdenes
+                      </span>
+                    </div>
+
+                    <div className={styles.tableWrapper} style={{ flexGrow: 1, overflowY: 'auto' }}>
+                      <table className={styles.table}>
+                        <thead>
+                          <tr>
+                            <th>ID</th>
+                            <th>Cliente</th>
+                            <th>Tipo / Sucursal</th>
+                            <th>Destino</th>
+                            <th>Repartidor</th>
+                            <th>Total / Detalle</th>
+                            <th>Estado</th>
+                            <th>Acción</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {orders.map((order) => {
+                            const branchName = branches.find(b => b.id === order.idSucursal)?.name || 'Sucursal';
+                            const itemsSummary = order.products.map(p => `${p.quantity}x ${p.name}`).join(', ');
+                            
+                            return (
+                              <tr 
+                                key={order.id}
+                                onClick={() => setSelectedOrderId(order.id)}
+                                style={{
+                                  cursor: 'pointer',
+                                  background: selectedOrderId === order.id ? 'rgba(247, 52, 12, 0.08)' : '',
+                                  transition: 'background 0.2s'
+                                }}
+                              >
+                                <td style={{ fontSize: '0.75rem', fontFamily: 'monospace' }}>{order.id.slice(-6)}</td>
+                                <td>
+                                  <div style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{order.customerName}</div>
+                                  {order.phone && <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>{order.phone}</div>}
+                                </td>
+                                <td>
+                                  <span className={styles.badge} style={{
+                                    fontSize: '0.68rem',
+                                    background: order.tipoEntrega === 'a_domicilio' ? 'var(--primary-glow)' : 'rgba(255,255,255,0.05)',
+                                    color: order.tipoEntrega === 'a_domicilio' ? 'var(--primary)' : 'var(--text-secondary)',
+                                    display: 'inline-block',
+                                    marginBottom: '2px',
+                                    padding: '2px 6px'
+                                  }}>
+                                    {order.tipoEntrega === 'a_domicilio' ? 'A domicilio' :
+                                     order.tipoEntrega === 'para_comer_aqui' ? 'Comer aquí' :
+                                     order.tipoEntrega === 'para_llevar' ? 'Para llevar' :
+                                     order.tipoEntrega === 'para_recoger' ? 'Recoger' :
+                                     order.tipoEntrega === 'por_app' ? 'Por App' : 'A domicilio'}
+                                  </span>
+                                  <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>{branchName}</div>
+                                </td>
+                                <td style={{ fontSize: '0.8rem' }} title={order.address}>
+                                  {order.tipoEntrega === 'a_domicilio' ? (
+                                    order.address.length > 18 ? order.address.slice(0, 18) + '...' : order.address
+                                  ) : (
+                                    <span style={{ color: 'var(--text-muted)', fontStyle: 'italic' }}>Consumo local</span>
+                                  )}
+                                </td>
+                                <td>
+                                  {order.tipoEntrega === 'a_domicilio' ? (
+                                    <select
+                                      className={styles.formInput}
+                                      style={{
+                                        padding: '4px 6px',
+                                        fontSize: '0.75rem',
+                                        height: 'auto',
+                                        width: '110px',
+                                        borderRadius: '6px',
+                                        background: 'var(--bg-secondary)',
+                                        border: '1px solid var(--border-color)',
+                                        color: 'var(--text-primary)',
+                                        cursor: 'pointer'
+                                      }}
+                                      value={order.repartidorId || ""}
+                                      onChange={(e) => updateOrderDriver(order.id, e.target.value || null)}
+                                    >
+                                      <option value="">Sin Asignar</option>
+                                      {personnel.filter(p => p.role === "Repartidor").map(d => (
+                                        <option key={d.id} value={d.id}>{d.name}</option>
+                                      ))}
+                                    </select>
+                                  ) : (
+                                    <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)', fontStyle: 'italic' }}>N/A</span>
+                                  )}
+                                </td>
+                                <td>
+                                  <div style={{ fontWeight: 'bold', color: 'var(--primary)' }}>${order.total}</div>
+                                  <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)', maxWidth: '100px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={itemsSummary}>
+                                    {itemsSummary}
+                                  </div>
+                                </td>
+                                <td>
+                                  <select
+                                    className={styles.formInput}
+                                    style={{
+                                      padding: '4px 8px',
+                                      fontSize: '0.75rem',
+                                      height: 'auto',
+                                      width: 'auto',
+                                      borderRadius: '6px',
+                                      background: 'var(--bg-secondary)',
+                                      border: '1px solid var(--border-color)',
+                                      color: 'var(--text-primary)',
+                                      cursor: 'pointer'
+                                    }}
+                                    value={order.status}
+                                    onChange={(e) => updateOrderStatus(order.id, e.target.value as Order['status'])}
+                                  >
+                                    <option value="creada">Creada</option>
+                                    <option value="en_preparacion">En Preparación</option>
+                                    <option value="lista">Lista (Despacho)</option>
+                                    <option value="en_camino">En Camino</option>
+                                    <option value="entregada">Entregada</option>
+                                    <option value="cancelada">Cancelada</option>
+                                  </select>
+                                </td>
+                                <td>
+                                  <div style={{ display: 'flex', gap: '4px' }}>
+                                    {(order.status === 'lista' || order.status === 'creada' || order.status === 'en_preparacion') && (
+                                      <button
+                                        onClick={() => handleDispatchOrder(order)}
+                                        className={styles.formBtn}
+                                        style={{
+                                          padding: '4px 8px',
+                                          margin: 0,
+                                          height: 'auto',
+                                          width: 'auto',
+                                          fontSize: '0.72rem',
+                                          background: 'var(--success)',
+                                          color: 'white',
+                                          fontWeight: 600,
+                                          border: 'none',
+                                          borderRadius: '4px',
+                                          boxShadow: 'none'
+                                        }}
+                                        title="Crear envío y despachar a delivery"
+                                      >
+                                        Despachar
+                                      </button>
+                                    )}
+                                    <button
+                                      className={`${styles.actionBtn} ${styles.btnDanger}`}
+                                      onClick={() => removeOrder(order.id)}
+                                      style={{ padding: '4px', width: 'fit-content' }}
+                                    >
+                                      <Trash2 size={14} />
+                                    </button>
+                                  </div>
+                                </td>
+                              </tr>
+                            );
+                          })}
+                          {orders.length === 0 && (
+                            <tr>
+                              <td colSpan={8} style={{ textAlign: 'center', padding: '30px', color: 'var(--text-muted)' }}>
+                                No hay órdenes registradas.
+                              </td>
+                            </tr>
+                          )}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+
+                  {/* Map Panel widget right side */}
+                  <div className="glass-panel" style={{ position: "relative", height: "100%", borderRadius: "var(--radius-lg)", overflow: "hidden", border: "1px solid var(--border-color)" }}>
+                    <MapContainer selectedOrderId={selectedOrderId} />
+                  </div>
+                </div>
+              )}
+
+            </div>
+          )}
+
+          {/* TAB 4: GESTIONAR PERSONAL */}
+          {activeTab === "personnel" && (
+            <div className={styles.deliveriesGrid}>
+              
+              {/* Formulario (Izquierda, 380px) */}
+              <div className={styles.sidebarPanel}>
+                <div className={`glass-panel ${styles.formCard}`}>
+                  <h3 className={styles.sectionTitle} style={{ marginBottom: "12px", display: "flex", alignItems: "center", gap: "8px" }}>
+                    <UserPlus size={18} /> Registrar Usuario/Personal
+                  </h3>
+                  <form onSubmit={handleCreateStaff} style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
+                    {staffError && <div style={{ color: "var(--danger)", background: "var(--danger-glow)", padding: "8px 12px", borderRadius: "var(--radius-sm)", fontSize: "0.8rem", fontWeight: 500 }}>{staffError}</div>}
+                    {staffMessage && <div style={{ color: "var(--success)", background: "var(--success-glow)", padding: "8px 12px", borderRadius: "var(--radius-sm)", fontSize: "0.8rem", fontWeight: 500 }}>{staffMessage}</div>}
+
+                    <div className={styles.formGroup}>
+                      <label className={styles.inputLabel}>Nombre Completo *</label>
+                      <input 
+                        type="text" 
+                        placeholder="Ej. Gabriela Vargas" 
+                        value={newStaffName}
+                        onChange={(e) => setNewStaffName(e.target.value)}
+                        className={styles.formInput}
+                        required
+                        disabled={staffIsLoading}
+                      />
+                    </div>
+
+                    <div className={styles.formGroup}>
+                      <label className={styles.inputLabel}>Correo Electrónico *</label>
+                      <input 
+                        type="email" 
+                        placeholder="gaby@reparto.com" 
+                        value={newStaffEmail}
+                        onChange={(e) => setNewStaffEmail(e.target.value)}
+                        className={styles.formInput}
+                        required
+                        disabled={staffIsLoading}
+                      />
+                    </div>
+
+                    <div className={styles.formGroup}>
+                      <label className={styles.inputLabel}>Teléfono (Opcional)</label>
+                      <input 
+                        type="text" 
+                        placeholder="Ej. 5512345678" 
+                        value={newStaffPhone}
+                        onChange={(e) => setNewStaffPhone(e.target.value)}
+                        className={styles.formInput}
+                        disabled={staffIsLoading}
+                      />
+                    </div>
+
+                    <div className={styles.formGroup}>
+                      <label className={styles.inputLabel}>Contraseña *</label>
+                      <input 
+                        type="password" 
+                        placeholder="••••••••" 
+                        value={newStaffPassword}
+                        onChange={(e) => setNewStaffPassword(e.target.value)}
+                        className={styles.formInput}
+                        required
+                        disabled={staffIsLoading}
+                      />
+                    </div>
+
+                    <div className={styles.formGroup}>
+                      <label className={styles.inputLabel}>Empresa Perteneciente *</label>
+                      <select
+                        value={newStaffCompanyId}
+                        onChange={(e) => setNewStaffCompanyId(e.target.value)}
+                        className={styles.formInput}
+                        style={{ color: "var(--text-primary)" }}
+                        required
+                        disabled={staffIsLoading}
+                      >
+                        {superAdminCompanies.map((comp, idx) => (
+                          <option key={`${comp.idEmpresa}-${idx}`} value={comp.idEmpresa}>
+                            {comp.Nombre_Empresa || comp.NombreEmpresa}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+
+                    <div className={styles.formGroup}>
+                      <label className={styles.inputLabel}>Rol Asignado</label>
+                      <select
+                        value={newStaffRole}
+                        onChange={(e) => setNewStaffRole(e.target.value)}
+                        className={styles.formInput}
+                        style={{ color: "var(--text-primary)" }}
+                        disabled={staffIsLoading}
+                      >
+                        <option value="Dispatcher">Despachador</option>
+                        <option value="Soporte">Soporte</option>
+                        <option value="Administrador">Administrador</option>
+                        <option value="Mesero">Mesero</option>
+                        <option value="Repartidor">Repartidor</option>
+                      </select>
+                    </div>
+
+                    <div className={styles.formGroup}>
+                      <label className={styles.inputLabel}>Turno</label>
+                      <select
+                        value={newStaffShift}
+                        onChange={(e) => setNewStaffShift(e.target.value as "Matutino" | "Vespertino" | "Nocturno")}
+                        className={styles.formInput}
+                        style={{ color: "var(--text-primary)" }}
+                        disabled={staffIsLoading}
+                      >
+                        <option value="Matutino">Matutino</option>
+                        <option value="Vespertino">Vespertino</option>
+                        <option value="Nocturno">Nocturno</option>
+                      </select>
+                    </div>
+
+                    <div className={styles.formGroup}>
+                      <label className={styles.inputLabel}>Sucursales Vinculadas</label>
+                      {branches.length > 0 ? (
+                        <div style={{
+                          display: 'flex',
+                          flexDirection: 'column',
+                          gap: '6px',
+                          maxHeight: '100px',
+                          overflowY: 'auto',
+                          padding: '8px 12px',
+                          background: 'rgba(255,255,255,0.02)',
+                          borderRadius: 'var(--radius-md)',
+                          border: '1px solid rgba(255,255,255,0.06)'
+                        }}>
+                          {branches.map(b => (
+                            <label key={b.id} style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
+                              <input
+                                type="checkbox"
+                                checked={newStaffBranches.includes(b.id)}
+                                disabled={staffIsLoading}
+                                onChange={(e) => {
+                                  if (e.target.checked) {
+                                    setNewStaffBranches(prev => [...prev, b.id]);
+                                  } else {
+                                    setNewStaffBranches(prev => prev.filter(id => id !== b.id));
+                                  }
+                                }}
+                              />
+                              {b.name}
+                            </label>
+                          ))}
+                        </div>
+                      ) : (
+                        <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+                          No hay sucursales disponibles.
+                        </span>
+                      )}
+                    </div>
+
+                    <div className={styles.formGroup}>
+                      <label className={styles.inputLabel}>Foto de Perfil</label>
+                      <input 
+                        type="file" 
+                        accept="image/*"
+                        onChange={handleStaffPhotoUpload}
+                        className={styles.formInput}
+                        style={{ padding: "6px" }}
+                        disabled={staffIsLoading}
+                      />
+                      {newStaffPhoto && (
+                        <div style={{ marginTop: "6px", display: "flex", alignItems: "center", gap: "10px", padding: "6px 12px", background: "var(--success-glow)", borderRadius: "var(--radius-sm)", border: "1px solid rgba(5, 150, 105, 0.15)" }}>
+                          <img 
+                            src={newStaffPhoto} 
+                            alt="Avatar Vista previa" 
+                            style={{ width: "28px", height: "28px", borderRadius: "50%", objectFit: "cover" }} 
+                          />
+                          <span style={{ fontSize: "0.7rem", color: "var(--success)", fontWeight: 500 }}>Foto validada</span>
+                          <button 
+                            type="button" 
+                            onClick={() => { setNewStaffPhoto(""); setNewStaffPhotoFile(null); }} 
+                            style={{ marginLeft: "auto", fontSize: "0.7rem", color: "var(--danger)", fontWeight: 600, background: "none", border: "none", cursor: "pointer" }}
+                          >
+                            Quitar
+                          </button>
+                        </div>
+                      )}
+                    </div>
+
+                    {newStaffRole === "Repartidor" && (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', padding: '12px', background: 'rgba(255,255,255,0.01)', borderRadius: 'var(--radius-md)', border: '1px dashed var(--border-color)', marginTop: '4px', marginBottom: '4px' }}>
+                        <h4 style={{ margin: 0, fontSize: '0.85rem', color: 'var(--text-primary)', fontWeight: 600 }}>Vehículo de Reparto</h4>
+                        
+                          <div className={styles.formGroup}>
+                            <label className={styles.inputLabel} style={{ fontSize: "0.68rem" }}>Tipo</label>
+                            <select
+                              value={newStaffVehicle}
+                              onChange={(e) => setNewStaffVehicle(e.target.value as any)}
+                              className={styles.formInput}
+                              disabled={staffIsLoading}
+                              style={{ color: "var(--text-primary)", padding: "8px" }}
+                            >
+                              <option value="Motocicleta">Motocicleta</option>
+                              <option value="Bicicleta">Bicicleta</option>
+                              <option value="Automóvil">Automóvil</option>
+                              <option value="Van">Van</option>
+                            </select>
+                          </div>
+
+                          <div className={styles.formGroup}>
+                            <label className={styles.inputLabel} style={{ fontSize: "0.68rem" }}>Modelo</label>
+                            <input
+                              type="text"
+                              placeholder="Honda 150"
+                              value={newStaffVehicleModel}
+                              onChange={(e) => setNewStaffVehicleModel(e.target.value)}
+                              className={styles.formInput}
+                              style={{ padding: "8px" }}
+                              disabled={staffIsLoading}
+                            />
+                          </div>
+
+                        <div className={styles.formGroup}>
+                          <label className={styles.inputLabel} style={{ fontSize: "0.68rem" }}>Placas</label>
+                          <input
+                            type="text"
+                            placeholder="Ej. 12ABC3"
+                            value={newStaffVehiclePlates}
+                            onChange={(e) => setNewStaffVehiclePlates(e.target.value)}
+                            className={styles.formInput}
+                            style={{ padding: "8px" }}
+                            disabled={staffIsLoading}
+                          />
+                        </div>
+
+                        <div className={styles.formGroup}>
+                          <label className={styles.inputLabel} style={{ fontSize: "0.68rem" }}>Fotos (Máx 5)</label>
+                          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: '4px', marginTop: '4px' }}>
+                            {Array.from({ length: 5 }).map((_, idx) => {
+                              const preview = newStaffVehiclePhotoPreviews[idx];
+                              if (preview) {
+                                return (
+                                  <div key={idx} style={{ position: 'relative', width: '100%', paddingBottom: '100%', borderRadius: '4px', overflow: 'hidden', border: '1px solid rgba(255,255,255,0.1)', background: 'rgba(255,255,255,0.02)' }}>
+                                    <img src={preview} alt={`Vehiculo preview ${idx + 1}`} style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', objectFit: 'cover' }} />
+                                    <button
+                                      type="button"
+                                      onClick={() => handleRemoveStaffVehiclePhotoPreview(idx)}
+                                      style={{ position: 'absolute', top: 2, right: 2, background: 'rgba(239, 68, 68, 0.9)', border: 'none', color: 'white', borderRadius: '50%', width: '14px', height: '14px', fontSize: '7px', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', padding: 0, zIndex: 3 }}
+                                      disabled={staffIsLoading}
+                                    >
+                                      ✕
+                                    </button>
+                                  </div>
+                                );
+                              } else {
+                                return (
+                                  <div 
+                                    key={idx} 
+                                    style={{ 
+                                      position: 'relative', 
+                                      width: '100%', 
+                                      paddingBottom: '100%', 
+                                      borderRadius: '4px', 
+                                      border: '1px dashed rgba(255, 255, 255, 0.12)',
+                                      background: 'rgba(255, 255, 255, 0.01)',
+                                      display: 'flex',
+                                      alignItems: 'center',
+                                      justifyContent: 'center',
+                                      cursor: 'pointer'
+                                    }}
+                                  >
+                                    <input 
+                                      type="file" 
+                                      accept="image/*" 
+                                      onChange={handleStaffVehiclePhotosUpload}
+                                      style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', opacity: 0, cursor: 'pointer', zIndex: 2 }}
+                                      disabled={staffIsLoading}
+                                    />
+                                    <div style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '1px', color: 'var(--text-muted)' }}>
+                                      <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>+</span>
+                                      <span style={{ fontSize: '0.45rem' }}>Subir</span>
+                                    </div>
+                                  </div>
+                                );
+                              }
+                            })}
+                          </div>
+                        </div>
+                      </div>
+                    )}
+
+                    <button type="submit" className={styles.formBtn} style={{ marginTop: "12px", padding: "12px" }} disabled={staffIsLoading}>
+                      {staffIsLoading ? "Registrando..." : "Guardar Operador"}
+                    </button>
+                  </form>
+                </div>
+              </div>
+
+              {/* Lista (Derecha, 1fr) */}
+              <div className={`glass-panel ${styles.listPanel}`} style={{ borderRadius: "var(--radius-lg)", padding: "20px" }}>
+                <div className={styles.sectionHeader} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "16px" }}>
+                  <h3 className={styles.sectionTitle} style={{ margin: 0 }}>Usuarios Registrados</h3>
+                  <span className={styles.badge} style={{ background: 'var(--primary-glow)', color: 'var(--primary)', fontSize: '0.85rem', padding: '4px 10px', borderRadius: "var(--radius-sm)" }}>
+                    {personnel.length} usuarios
+                  </span>
+                </div>
+                <div className={styles.tableWrapper}>
+                  <table className={styles.table}>
+                    <thead>
+                      <tr>
+                        <th>Usuario</th>
+                        <th>Email</th>
+                        <th>Teléfono</th>
+                        <th>Rol / Vehículo</th>
+                        <th>Sucursales Vinculadas</th>
+                        <th>Turno</th>
+                        <th>Estado</th>
+                        <th>Acción</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {personnel.map((staff) => (
+                        <tr key={staff.id}>
+                          <td>
+                            <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+                              {staff.foto ? (
+                                <img 
+                                  src={staff.foto} 
+                                  alt={staff.name} 
+                                  style={{ width: "32px", height: "32px", borderRadius: "50%", objectFit: "cover", border: "1px solid var(--border-color)" }} 
+                                  onError={(e) => {
+                                    // Fallback if image fails to load
+                                    e.currentTarget.style.display = 'none';
+                                  }}
+                                />
+                              ) : null}
+                              {!staff.foto ? (
+                                <div style={{ 
+                                  width: "32px", 
+                                  height: "32px", 
+                                  borderRadius: "50%", 
+                                  background: "var(--primary-glow)", 
+                                  color: "var(--primary)", 
+                                  display: "flex", 
+                                  alignItems: "center", 
+                                  justifyContent: "center",
+                                  fontSize: "0.8rem",
+                                  fontWeight: 600
+                                }}>
+                                  {staff.name.split(" ").map(w => w[0]).join("").substring(0, 2).toUpperCase()}
+                                </div>
+                              ) : null}
+                              <span style={{ fontWeight: 600, color: "var(--text-primary)" }}>{staff.name}</span>
+                            </div>
+                          </td>
+                          <td>{staff.email}</td>
+                          <td>{staff.phone || "-"}</td>
+                          <td>
+                            <div>
+                              <span style={{ 
+                                padding: "2px 6px", 
+                                borderRadius: "4px", 
+                                fontSize: "0.75rem",
+                                background: staff.role === "Administrador" ? "var(--primary-glow)" : "rgba(255,255,255,0.03)",
+                                color: staff.role === "Administrador" ? "var(--primary)" : "var(--text-secondary)"
+                              }}>
+                                {staff.role}
+                              </span>
+                              {staff.role === "Repartidor" && staff.vehicle && (
+                                <div style={{ fontSize: "0.7rem", color: "var(--text-muted)", marginTop: "4px" }}>
+                                  {staff.vehicle} {staff.modelo ? `(${staff.modelo})` : ""} {staff.placas ? `• ${staff.placas}` : ""}
+                                </div>
+                              )}
+                            </div>
+                          </td>
+                          <td>
+                            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px', maxWidth: '150px' }}>
+                              {staff.sucursales && staff.sucursales.length > 0 ? (
+                                staff.sucursales.map((sid) => {
+                                  const name = branches.find(b => b.id === sid)?.name || 'Sucursal';
+                                  return (
+                                    <span key={sid} className={styles.badge} style={{ background: 'var(--primary-glow)', color: 'var(--primary)', fontSize: '0.7rem', padding: '2px 6px' }}>
+                                      {name}
+                                    </span>
+                                  );
+                                })
+                              ) : (
+                                <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>Ninguna</span>
+                              )}
+                            </div>
+                          </td>
+                          <td>{staff.shift || "-"}</td>
+                          <td>
+                            <span style={{ 
+                              color: staff.status === "active" ? "var(--success)" : "var(--text-muted)",
+                              fontWeight: 600,
+                              fontSize: "0.75rem"
+                            }}>
+                              {staff.status === "active" ? "Activo" : "Inactivo"}
+                            </span>
+                          </td>
+                          <td>
+                            <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                              <button 
+                                onClick={() => handleStartEditStaff(staff)}
+                                style={{ color: "var(--primary)", padding: "4px" }}
+                                title="Editar operador"
+                              >
+                                <Edit2 size={16} />
+                              </button>
+                              <button 
+                                onClick={() => {
+                                  if (window.confirm(`¿Estás seguro de que deseas eliminar al usuario ${staff.name}?`)) {
+                                    removePersonnel(staff.id);
+                                  }
+                                }}
+                                style={{ color: "var(--danger)", padding: "4px" }}
+                                title="Dar de baja"
+                              >
+                                <Trash2 size={16} />
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+            </div>
+          )}
+
+          {/* TAB: SUPER ADMINISTRADORES */}
+          {activeTab === "super-admins" && isSuperAdmin && (
+            <div className={styles.deliveriesGrid}>
+              
+              {/* Formulario (Izquierda, 380px) */}
+              <div className={styles.sidebarPanel}>
+                <div className={`glass-panel ${styles.formCard}`}>
+                  <h3 className={styles.sectionTitle} style={{ marginBottom: "12px", display: "flex", alignItems: "center", gap: "8px" }}>
+                    <Shield size={18} /> Registrar SuperAdmin
+                  </h3>
+                  <form onSubmit={handleCreateSuperAdmin} style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
+                    {saError && <div style={{ color: "var(--danger)", background: "var(--danger-glow)", padding: "8px 12px", borderRadius: "var(--radius-sm)", fontSize: "0.8rem", fontWeight: 500 }}>{saError}</div>}
+                    {saMessage && <div style={{ color: "var(--success)", background: "var(--success-glow)", padding: "8px 12px", borderRadius: "var(--radius-sm)", fontSize: "0.8rem", fontWeight: 500 }}>{saMessage}</div>}
+
+                    <div className={styles.formGroup}>
+                      <label className={styles.inputLabel}>Nombre Completo *</label>
+                      <input 
+                        type="text" 
+                        placeholder="Ej. Juan Pérez" 
+                        value={newSaName}
+                        onChange={(e) => setNewSaName(e.target.value)}
+                        className={styles.formInput}
+                        required
+                        disabled={saIsLoading}
+                      />
+                    </div>
+
+                    <div className={styles.formGroup}>
+                      <label className={styles.inputLabel}>Correo Electrónico *</label>
+                      <input 
+                        type="email" 
+                        placeholder="admin@reparto.com" 
+                        value={newSaEmail}
+                        onChange={(e) => setNewSaEmail(e.target.value)}
+                        className={styles.formInput}
+                        required
+                        disabled={saIsLoading}
+                      />
+                    </div>
+
+                    <div className={styles.formGroup}>
+                      <label className={styles.inputLabel}>Teléfono (Opcional)</label>
+                      <input 
+                        type="text" 
+                        placeholder="Ej. 5512345678" 
+                        value={newSaPhone}
+                        onChange={(e) => setNewSaPhone(e.target.value)}
+                        className={styles.formInput}
+                        disabled={saIsLoading}
+                      />
+                    </div>
+
+                    <div className={styles.formGroup}>
+                      <label className={styles.inputLabel}>Contraseña *</label>
+                      <input 
+                        type="password" 
+                        placeholder="••••••••" 
+                        value={newSaPassword}
+                        onChange={(e) => setNewSaPassword(e.target.value)}
+                        className={styles.formInput}
+                        required
+                        disabled={saIsLoading}
+                      />
+                    </div>
+
+                    <div className={styles.formGroup}>
+                      <label className={styles.inputLabel}>Foto de Perfil</label>
+                      <input 
+                        type="file" 
+                        accept="image/*"
+                        onChange={handleSaPhotoUpload}
+                        className={styles.formInput}
+                        style={{ padding: "6px" }}
+                        disabled={saIsLoading}
+                      />
+                      {newSaPhoto && (
+                        <div style={{ marginTop: "6px", display: "flex", alignItems: "center", gap: "10px", padding: "6px 12px", background: "var(--success-glow)", borderRadius: "var(--radius-sm)", border: "1px solid rgba(5, 150, 105, 0.15)" }}>
+                          <img 
+                            src={newSaPhoto} 
+                            alt="Avatar Vista previa" 
+                            style={{ width: "28px", height: "28px", borderRadius: "50%", objectFit: "cover" }} 
+                          />
+                          <span style={{ fontSize: "0.7rem", color: "var(--success)", fontWeight: 500 }}>Foto validada</span>
+                          <button 
+                            type="button" 
+                            onClick={() => { setNewSaPhoto(""); setNewSaPhotoFile(null); }} 
+                            style={{ marginLeft: "auto", fontSize: "0.7rem", color: "var(--danger)", fontWeight: 600, background: "none", border: "none", cursor: "pointer" }}
+                          >
+                            Quitar
+                          </button>
+                        </div>
+                      )}
+                    </div>
+
+                    <button type="submit" className={styles.formBtn} style={{ marginTop: "12px", padding: "12px" }} disabled={saIsLoading}>
+                      {saIsLoading ? "Registrando..." : "Guardar SuperAdmin"}
+                    </button>
+                  </form>
+                </div>
+              </div>
+
+              {/* Lista (Derecha, 1fr) */}
+              <div className={`glass-panel ${styles.listPanel}`} style={{ borderRadius: "var(--radius-lg)", padding: "20px" }}>
+                <div className={styles.sectionHeader} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "16px" }}>
+                  <h3 className={styles.sectionTitle} style={{ margin: 0 }}>SuperAdministradores Registrados</h3>
+                  <span className={styles.badge} style={{ background: 'var(--primary-glow)', color: 'var(--primary)', fontSize: '0.85rem', padding: '4px 10px', borderRadius: "var(--radius-sm)" }}>
+                    {superAdmins.length} superAdmins
+                  </span>
+                </div>
+                <div className={styles.tableWrapper}>
+                  <table className={styles.table}>
+                    <thead>
+                      <tr>
+                        <th>Usuario</th>
+                        <th>Email</th>
+                        <th>Teléfono</th>
+                        <th>Rol</th>
+                        <th>Estado</th>
+                        <th>Acción</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {superAdmins.map((admin) => (
+                        <tr key={admin.id}>
+                          <td>
+                            <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+                              {admin.foto ? (
+                                <img 
+                                  src={admin.foto} 
+                                  alt={admin.name} 
+                                  style={{ width: "32px", height: "32px", borderRadius: "50%", objectFit: "cover", border: "1px solid var(--border-color)" }} 
+                                  onError={(e) => {
+                                    e.currentTarget.style.display = 'none';
+                                  }}
+                                />
+                              ) : null}
+                              {!admin.foto ? (
+                                <div style={{ 
+                                  width: "32px", 
+                                  height: "32px", 
+                                  borderRadius: "50%", 
+                                  background: "var(--primary-glow)", 
+                                  color: "var(--primary)", 
+                                  display: "flex", 
+                                  alignItems: "center", 
+                                  justifyContent: "center",
+                                  fontSize: "0.8rem",
+                                  fontWeight: 600
+                                }}>
+                                  {admin.name.split(" ").map(w => w[0]).join("").substring(0, 2).toUpperCase()}
+                                </div>
+                              ) : null}
+                              <span style={{ fontWeight: 600, color: "var(--text-primary)" }}>{admin.name}</span>
+                            </div>
+                          </td>
+                          <td>{admin.email}</td>
+                          <td>{admin.phone || "-"}</td>
+                          <td>
+                            <span style={{ 
+                              padding: "2px 6px", 
+                              borderRadius: "4px", 
+                              fontSize: "0.75rem",
+                              background: "var(--primary-glow)",
+                              color: "var(--primary)"
+                            }}>
+                              SuperAdmin
+                            </span>
+                          </td>
+                          <td>
+                            <span style={{ 
+                              color: admin.status === "active" ? "var(--success)" : "var(--text-muted)",
+                              fontWeight: 600,
+                              fontSize: "0.75rem"
+                            }}>
+                              {admin.status === "active" ? "Activo" : "Inactivo"}
+                            </span>
+                          </td>
+                          <td>
+                            <button 
+                              onClick={() => {
+                                if (window.confirm(`¿Estás seguro de que deseas eliminar al SuperAdministrador ${admin.name}?`)) {
+                                  removeSuperAdmin(admin.id);
+                                }
+                              }}
+                              style={{ color: "var(--danger)", padding: "4px" }}
+                              title="Dar de baja"
+                            >
+                              <Trash2 size={16} />
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+            </div>
+          )}
+
+          {/* TAB 5: PRODUCTS */}
+          {activeTab === "products" && (
+            <div className={styles.deliveriesGrid}>
+              
+              {/* Formulario (Izquierda, 380px) */}
+              <div className={styles.sidebarPanel}>
+                <div className={`glass-panel ${styles.formCard}`}>
+                  <h3 className={styles.sectionTitle} style={{ marginBottom: '16px' }}>
+                    {editingProduct ? "Editar Producto" : "Nuevo Producto"}
+                  </h3>
+                  <form onSubmit={handleCreateProduct} style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+                    <div className={styles.formGroup}>
+                      <label className={styles.inputLabel}>Nombre del Producto</label>
+                      <input 
+                        type="text" 
+                        required 
+                        placeholder="Ej. Hamburguesa Doble"
+                        className={styles.formInput}
+                        value={newProductName}
+                        onChange={(e) => setNewProductName(e.target.value)}
+                        disabled={productUploadingPhotos}
+                      />
+                    </div>
+                    <div className={styles.formGroup}>
+                      <label className={styles.inputLabel}>Precio ($)</label>
+                      <input 
+                        type="number" 
+                        required 
+                        placeholder="Ej. 150"
+                        className={styles.formInput}
+                        value={newProductPrice}
+                        onChange={(e) => setNewProductPrice(e.target.value)}
+                        disabled={productUploadingPhotos}
+                      />
+                    </div>
+                    <div className={styles.formGroup}>
+                      <label className={styles.inputLabel}>Categoría</label>
+                      <select 
+                        className={styles.formInput}
+                        value={newProductCategory}
+                        onChange={(e) => setNewProductCategory(e.target.value)}
+                        disabled={productUploadingPhotos}
+                        style={{ color: "var(--text-primary)" }}
+                      >
+                        <option value="Comida">Comida</option>
+                        <option value="Bebidas">Bebidas</option>
+                        <option value="Postres">Postres</option>
+                        <option value="Otros">Otros</option>
+                      </select>
+                    </div>
+                    <div className={styles.formGroup}>
+                      <label className={styles.inputLabel}>Descripción</label>
+                      <input 
+                        type="text" 
+                        placeholder="Ej. Con queso cheddar y tocino"
+                        className={styles.formInput}
+                        value={newProductDesc}
+                        onChange={(e) => setNewProductDesc(e.target.value)}
+                        disabled={productUploadingPhotos}
+                      />
+                    </div>
+
+                    {/* Sucursales Affiliation */}
+                    <div className={styles.formGroup}>
+                      <label className={styles.inputLabel}>Sucursales Afiliadas</label>
+                      {branches.length > 0 ? (
+                        <div style={{
+                          display: 'flex',
+                          flexDirection: 'column',
+                          gap: '8px',
+                          maxHeight: '120px',
+                          overflowY: 'auto',
+                          padding: '10px',
+                          background: 'rgba(255,255,255,0.02)',
+                          borderRadius: 'var(--radius-md)',
+                          border: '1px solid rgba(255,255,255,0.08)'
+                        }}>
+                          {branches.map(b => (
+                            <label key={b.id} style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', fontSize: '0.82rem', color: 'var(--text-secondary)' }}>
+                              <input
+                                type="checkbox"
+                                checked={newProductBranches.includes(b.id)}
+                                disabled={productUploadingPhotos}
+                                onChange={(e) => {
+                                  if (e.target.checked) {
+                                    setNewProductBranches(prev => [...prev, b.id]);
+                                  } else {
+                                    setNewProductBranches(prev => prev.filter(id => id !== b.id));
+                                  }
+                                }}
+                              />
+                              {b.name}
+                            </label>
+                          ))}
+                        </div>
+                      ) : (
+                        <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+                          No hay sucursales disponibles.
+                        </span>
+                      )}
+                    </div>
+
+                    {/* Photo Grid (Max 8 photos) */}
+                    <div className={styles.formGroup}>
+                      <label className={styles.inputLabel}>Fotos del Producto (Máx 8 fotos)</label>
+                      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '6px', marginTop: '6px' }}>
+                        {Array.from({ length: 8 }).map((_, idx) => {
+                          const preview = newProductPhotoPreviews[idx];
+                          if (preview) {
+                            return (
+                              <div key={idx} style={{ position: 'relative', width: '100%', paddingBottom: '100%', borderRadius: 'var(--radius-md)', overflow: 'hidden', border: '1px solid rgba(255,255,255,0.1)', background: 'rgba(255,255,255,0.02)' }}>
+                                <img src={preview} alt={`Preview ${idx + 1}`} style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', objectFit: 'cover' }} />
+                                <button
+                                  type="button"
+                                  onClick={() => handleRemoveProductPhotoPreview(idx)}
+                                  style={{ position: 'absolute', top: 2, right: 2, background: 'rgba(239, 68, 68, 0.9)', border: 'none', color: 'white', borderRadius: '50%', width: '16px', height: '16px', fontSize: '8px', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', padding: 0, zIndex: 3 }}
+                                  disabled={productUploadingPhotos}
+                                >
+                                  ✕
+                                </button>
+                              </div>
+                            );
+                          } else {
+                            return (
+                              <div 
+                                key={idx} 
+                                style={{ 
+                                  position: 'relative', 
+                                  width: '100%', 
+                                  paddingBottom: '100%', 
+                                  borderRadius: 'var(--radius-md)', 
+                                  border: '1px dashed rgba(255, 255, 255, 0.15)',
+                                  background: 'rgba(255, 255, 255, 0.02)',
+                                  display: 'flex',
+                                  alignItems: 'center',
+                                  justifyContent: 'center',
+                                  cursor: 'pointer'
+                                }}
+                              >
+                                <input 
+                                  type="file" 
+                                  accept="image/*" 
+                                  onChange={handleProductPhotosUpload}
+                                  style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', opacity: 0, cursor: 'pointer', zIndex: 2 }}
+                                  disabled={productUploadingPhotos}
+                                />
+                                <div style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '2px', color: 'var(--text-muted)' }}>
+                                  <span style={{ fontSize: '1rem', color: 'var(--text-secondary)' }}>+</span>
+                                  <span style={{ fontSize: '0.55rem' }}>Subir</span>
+                                </div>
+                              </div>
+                            );
+                          }
+                        })}
+                      </div>
+                    </div>
+
+                    <div style={{ display: 'flex', gap: '8px', marginTop: '10px' }}>
+                      <button type="submit" className={styles.formBtn} disabled={productUploadingPhotos} style={{ flex: 1 }}>
+                        {productUploadingPhotos ? (
+                          "Guardando..."
+                        ) : editingProduct ? (
+                          "Guardar Cambios"
+                        ) : (
+                          <><Plus size={18} /> Registrar Producto</>
+                        )}
+                      </button>
+                      {editingProduct && (
+                        <button 
+                          type="button" 
+                          className={styles.formBtn} 
+                          onClick={handleCancelProductEdit}
+                          style={{ background: 'rgba(255,255,255,0.05)', color: 'var(--text-secondary)', borderColor: 'rgba(255,255,255,0.1)', flex: 1 }}
+                          disabled={productUploadingPhotos}
+                        >
+                          Cancelar
+                        </button>
+                      )}
+                    </div>
+                  </form>
+                </div>
+              </div>
+
+              {/* Lista (Derecha, 1fr) */}
+              <div className={`glass-panel ${styles.listPanel}`} style={{ borderRadius: 'var(--radius-lg)' }}>
+                <div className={styles.sectionHeader}>
+                  <h2 className={styles.sectionTitle}>Productos Activos</h2>
+                  <span className={styles.badge} style={{ background: 'var(--primary-glow)', color: 'var(--primary)', fontSize: '0.85rem', padding: '4px 10px' }}>
+                    {products.length} registrados
+                  </span>
+                </div>
+                <div className={styles.tableWrapper}>
+                  <table className={styles.table}>
+                    <thead>
+                      <tr>
+                        <th>Nombre / Descripción</th>
+                        <th>Categoría</th>
+                        <th>Sucursales Afiliadas</th>
+                        <th>Precio</th>
+                        <th>Acción</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {products.map((prod) => {
+                        const firstPhoto = prod.fotos && prod.fotos[0];
+                        const affiliatedBranches = (prod.idSucursales || [])
+                          .map(sid => branches.find(b => b.id === sid)?.name)
+                          .filter(Boolean);
+
+                        return (
+                          <tr 
+                            key={prod.id}
+                            onClick={() => handleEditProductClick(prod)}
+                            style={{ cursor: 'pointer', transition: 'background 0.2s' }}
+                            onMouseEnter={(e) => e.currentTarget.style.background = 'rgba(255,255,255,0.03)'}
+                            onMouseLeave={(e) => e.currentTarget.style.background = ''}
+                          >
+                            <td>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                                {firstPhoto ? (
+                                  <img 
+                                    src={firstPhoto} 
+                                    alt={prod.name} 
+                                    style={{ width: '36px', height: '36px', borderRadius: 'var(--radius-sm)', objectFit: 'cover' }} 
+                                  />
+                                ) : (
+                                  <div style={{ width: '36px', height: '36px', borderRadius: 'var(--radius-sm)', background: 'rgba(255,255,255,0.05)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-muted)' }}>
+                                    <Package size={16} />
+                                  </div>
+                                )}
+                                <div>
+                                  <div style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{prod.name}</div>
+                                  <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', maxWidth: '200px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                    {prod.description || 'Sin descripción'}
+                                  </div>
+                                </div>
+                              </div>
+                            </td>
+                            <td>
+                              <span className={styles.badge} style={{ background: 'rgba(255,255,255,0.03)', color: 'var(--text-secondary)' }}>
+                                {prod.category}
+                              </span>
+                            </td>
+                            <td>
+                              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px', maxWidth: '200px' }}>
+                                {affiliatedBranches.length > 0 ? (
+                                  affiliatedBranches.map((name, idx) => (
+                                    <span key={idx} className={styles.badge} style={{ background: 'var(--primary-glow)', color: 'var(--primary)', fontSize: '0.7rem', padding: '2px 6px' }}>
+                                      {name}
+                                    </span>
+                                  ))
+                                ) : (
+                                  <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>Ninguna</span>
+                                )}
+                              </div>
+                            </td>
+                            <td style={{ color: 'var(--success)', fontWeight: 600 }}>${prod.price.toFixed(2)}</td>
+                            <td>
+                              <div style={{ display: 'flex', gap: '6px' }} onClick={(e) => e.stopPropagation()}>
+                                <button 
+                                  className={styles.actionBtn}
+                                  onClick={() => handleEditProductClick(prod)}
+                                  style={{ width: 'fit-content', padding: '6px', background: 'rgba(255,255,255,0.05)', borderColor: 'rgba(255,255,255,0.1)', color: 'var(--text-primary)' }}
+                                  title="Editar"
+                                >
+                                  <Edit2 size={14} />
+                                </button>
+                                <button 
+                                  className={`${styles.actionBtn} ${styles.btnDanger}`}
+                                  onClick={() => {
+                                    if (window.confirm(`¿Estás seguro de que deseas eliminar el producto ${prod.name}?`)) {
+                                      removeProduct(prod.id);
+                                    }
+                                  }}
+                                  style={{ width: 'fit-content', padding: '6px' }}
+                                  title="Eliminar"
+                                >
+                                  <Trash2 size={14} />
+                                </button>
+                              </div>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                      {products.length === 0 && (
+                        <tr>
+                          <td colSpan={5} style={{ textAlign: 'center', padding: '30px', color: 'var(--text-muted)' }}>
+                            No hay productos registrados.
+                          </td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+            </div>
+          )}
+
+          {/* TAB 6: BRANCHES */}
+          {activeTab === "branches" && (
+            <div className={styles.deliveriesGrid}>
+              
+              {/* Formulario (Izquierda, 380px) */}
+              <div className={styles.sidebarPanel}>
+                <div className={`glass-panel ${styles.formCard}`}>
+                  <h3 className={styles.sectionTitle} style={{ marginBottom: '16px' }}>Nueva Sucursal</h3>
+                  <form onSubmit={handleCreateBranch} style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+                    <div className={styles.formGroup}>
+                      <label className={styles.inputLabel}>Nombre de Sucursal</label>
+                      <input 
+                        type="text" 
+                        required 
+                        placeholder="Ej. Sucursal Reforma"
+                        className={styles.formInput}
+                        value={newBranchName}
+                        onChange={(e) => setNewBranchName(e.target.value)}
+                        disabled={branchUploadingPhotos}
+                      />
+                    </div>
+                    <div className={styles.formGroup} style={{ position: 'relative' }}>
+                      <label className={styles.inputLabel}>Dirección</label>
+                      <input 
+                        type="text" 
+                        required 
+                        placeholder="Ej. Av. Reforma 222"
+                        className={styles.formInput}
+                        value={newBranchAddress}
+                        onChange={(e) => setNewBranchAddress(e.target.value)}
+                        onFocus={() => setShowNewBranchSuggestions(true)}
+                        onBlur={() => setTimeout(() => setShowNewBranchSuggestions(false), 250)}
+                        disabled={branchUploadingPhotos}
+                      />
+                      {isLoadingNewBranchSuggestions && (
+                        <div style={{ position: 'absolute', right: '12px', top: '35px', fontSize: '0.7rem', color: 'var(--primary)' }}>
+                          Buscando...
+                        </div>
+                      )}
+                      {showNewBranchSuggestions && newBranchSuggestions.length > 0 && (
+                        <ul style={{
+                          position: 'absolute',
+                          top: '100%',
+                          left: 0,
+                          right: 0,
+                          background: '#ffffff',
+                          border: '1px solid #cbd5e1',
+                          borderRadius: 'var(--radius-md)',
+                          boxShadow: '0 10px 25px rgba(0, 0, 0, 0.1)',
+                          zIndex: 100,
+                          listStyle: 'none',
+                          padding: '4px 0',
+                          margin: '4px 0 0 0',
+                          maxHeight: '180px',
+                          overflowY: 'auto'
+                        }}>
+                          {newBranchSuggestions.map((s, idx) => (
+                            <li 
+                              key={idx}
+                              onMouseDown={() => {
+                                newBranchAddressSelectedFromListRef.current = true;
+                                setNewBranchAddress(s.place_name);
+                                setNewBranchLat(s.center[1]);
+                                setNewBranchLng(s.center[0]);
+                                setShowNewBranchSuggestions(false);
+                              }}
+                              style={{
+                                padding: '8px 12px',
+                                fontSize: '0.8rem',
+                                color: '#1e293b',
+                                cursor: 'pointer',
+                                borderBottom: idx < newBranchSuggestions.length - 1 ? '1px solid #f1f5f9' : 'none',
+                                transition: 'background 0.2s'
+                              }}
+                              onMouseEnter={(e) => e.currentTarget.style.background = '#f1f5f9'}
+                              onMouseLeave={(e) => e.currentTarget.style.background = ''}
+                            >
+                              📍 {s.place_name}
+                            </li>
+                          ))}
+                        </ul>
+                      )}
+                    </div>
+
+                    <div className={styles.formGroup}>
+                      <label className={styles.inputLabel}>Enlace de Google Maps (Ubicación)</label>
+                      <input 
+                        type="url" 
+                        placeholder="Ej. https://maps.google.com/?q=..."
+                        className={styles.formInput}
+                        value={newBranchMapLink}
+                        onChange={(e) => setNewBranchMapLink(e.target.value)}
+                        disabled={branchUploadingPhotos}
+                      />
+                    </div>
+                    
+                    {/* Teléfonos Dinámicos */}
+                    <div className={styles.formGroup}>
+                      <label className={styles.inputLabel}>Teléfonos de la Sucursal</label>
+                      {newBranchPhones.map((phone, idx) => (
+                        <div key={idx} style={{ display: 'flex', gap: '8px', marginBottom: '8px' }}>
+                          <input 
+                            type="text" 
+                            required={idx === 0} 
+                            placeholder={idx === 0 ? "Ej. 55-1234-5678 (Principal)" : "Ej. 55-9876-5432 (Opcional)"}
+                            className={styles.formInput}
+                            value={phone}
+                            onChange={(e) => handleBranchPhoneChange(idx, e.target.value)}
+                            style={{ flex: 1 }}
+                            disabled={branchUploadingPhotos}
+                          />
+                          {newBranchPhones.length > 1 && (
+                            <button
+                              type="button"
+                              onClick={() => handleRemoveBranchPhoneField(idx)}
+                              className={styles.actionBtn}
+                              style={{
+                                background: 'rgba(239, 68, 68, 0.15)',
+                                color: '#ef4444',
+                                borderColor: 'rgba(239, 68, 68, 0.2)',
+                                padding: '0 12px',
+                                height: '42px',
+                                borderRadius: 'var(--radius-md)'
+                              }}
+                              disabled={branchUploadingPhotos}
+                            >
+                              ✕
+                            </button>
+                          )}
+                        </div>
+                      ))}
+                      <button
+                        type="button"
+                        onClick={handleAddBranchPhoneField}
+                        className={styles.actionBtn}
+                        style={{
+                          width: '100%',
+                          fontSize: '0.85rem',
+                          background: 'rgba(255,255,255,0.05)',
+                          borderColor: 'rgba(255,255,255,0.1)',
+                          padding: '8px',
+                          borderRadius: 'var(--radius-md)',
+                          color: 'var(--text-secondary)',
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          gap: '6px'
+                        }}
+                        disabled={branchUploadingPhotos}
+                      >
+                        <Plus size={14} /> Agregar Teléfono
+                      </button>
+                    </div>
+
+                    {/* Tarifas de Envío */}
+                    <div className={styles.formGroup} style={{ borderTop: '1px solid rgba(255,255,255,0.06)', paddingTop: '16px', marginTop: '8px' }}>
+                      <label className={styles.inputLabel} style={{ marginBottom: '8px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                        <span>Tarifas de Envío por Distancia</span>
+                        <button
+                          type="button"
+                          onClick={handleAddBranchRate}
+                          style={{
+                            background: 'var(--primary-glow)',
+                            border: '1px solid rgba(247, 52, 12, 0.15)',
+                            color: 'var(--primary)',
+                            padding: '2px 8px',
+                            borderRadius: 'var(--radius-sm)',
+                            fontSize: '0.72rem',
+                            fontWeight: 600,
+                            cursor: 'pointer',
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '4px'
+                          }}
+                          disabled={branchUploadingPhotos}
+                        >
+                          <Plus size={12} /> Agregar Rango
+                        </button>
+                      </label>
+                      
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', maxHeight: '200px', overflowY: 'auto', paddingRight: '4px', marginBottom: '10px' }}>
+                        {newBranchRates.map((rate, idx) => (
+                          <div key={idx} style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+                            <div style={{ flex: 1, display: 'flex', gap: '4px', alignItems: 'center' }}>
+                              <input 
+                                type="number" 
+                                step="any"
+                                required 
+                                placeholder="Desde"
+                                className={styles.formInput}
+                                value={rate.min_km ?? ""}
+                                onChange={(e) => handleBranchRateChange(idx, 'min_km', e.target.value)}
+                                style={{ width: '65px', padding: '6px 8px', fontSize: '0.8rem' }}
+                                disabled={branchUploadingPhotos}
+                              />
+                              <span style={{ color: 'var(--text-muted)', fontSize: '0.75rem', alignSelf: 'center' }}>a</span>
+                              <input 
+                                type="number" 
+                                step="any"
+                                required 
+                                placeholder="Hasta"
+                                className={styles.formInput}
+                                value={rate.max_km ?? ""}
+                                onChange={(e) => handleBranchRateChange(idx, 'max_km', e.target.value)}
+                                style={{ width: '65px', padding: '6px 8px', fontSize: '0.8rem' }}
+                                disabled={branchUploadingPhotos}
+                              />
+                              <span style={{ color: 'var(--text-muted)', fontSize: '0.75rem', alignSelf: 'center' }}>km:</span>
+                            </div>
+                            <div style={{ width: '90px', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                              <span style={{ color: 'var(--success)', fontSize: '0.8rem', fontWeight: 600 }}>$</span>
+                              <input 
+                                type="number" 
+                                required 
+                                placeholder="Precio"
+                                className={styles.formInput}
+                                value={rate.precio ?? ""}
+                                onChange={(e) => handleBranchRateChange(idx, 'precio', e.target.value)}
+                                style={{ flex: 1, padding: '6px 8px', fontSize: '0.8rem' }}
+                                disabled={branchUploadingPhotos}
+                              />
+                            </div>
+                            {newBranchRates.length > 1 && (
+                              <button
+                                type="button"
+                                onClick={() => handleRemoveBranchRate(idx)}
+                                style={{
+                                  background: 'rgba(239, 68, 68, 0.08)',
+                                  color: '#ef4444',
+                                  border: '1px solid rgba(239, 68, 68, 0.15)',
+                                  borderRadius: 'var(--radius-md)',
+                                  width: '28px',
+                                  height: '28px',
+                                  display: 'flex',
+                                  alignItems: 'center',
+                                  justifyContent: 'center',
+                                  cursor: 'pointer'
+                                }}
+                                disabled={branchUploadingPhotos}
+                              >
+                                <Trash2 size={12} />
+                              </button>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                      
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'rgba(255,255,255,0.02)', padding: '8px 12px', borderRadius: 'var(--radius-md)', border: '1px solid rgba(255,255,255,0.06)' }}>
+                        <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>Precio por Km Extra</span>
+                        <div style={{ width: '100px', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                          <span style={{ color: 'var(--primary)', fontSize: '0.8rem', fontWeight: 600 }}>$</span>
+                          <input 
+                            type="number" 
+                            required 
+                            placeholder="10"
+                            className={styles.formInput}
+                            value={newBranchExtraKmPrice}
+                            onChange={(e) => setNewBranchExtraKmPrice(e.target.value)}
+                            style={{ flex: 1, padding: '6px 8px', fontSize: '0.8rem' }}
+                            disabled={branchUploadingPhotos}
+                          />
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Selector de fotos de la sucursal (6 recuadros premium) */}
+                    <div className={styles.formGroup}>
+                      <label className={styles.inputLabel} style={{ marginBottom: '6px', display: 'block' }}>
+                        Fotos de la Sucursal (Máx 6 fotos)
+                      </label>
+                      <div 
+                        style={{ 
+                          display: 'grid', 
+                          gridTemplateColumns: 'repeat(3, 1fr)', 
+                          gap: '8px', 
+                          marginTop: '6px' 
+                        }}
+                      >
+                        {Array.from({ length: 6 }).map((_, idx) => {
+                          const preview = newBranchPhotoPreviews[idx];
+                          if (preview) {
+                            return (
+                              <div 
+                                key={idx} 
+                                style={{ 
+                                  position: 'relative', 
+                                  width: '100%', 
+                                  paddingBottom: '100%', 
+                                  borderRadius: 'var(--radius-md)', 
+                                  overflow: 'hidden', 
+                                  border: '1px solid rgba(255,255,255,0.1)',
+                                  background: 'rgba(255,255,255,0.02)'
+                                }}
+                              >
+                                <img 
+                                  src={preview} 
+                                  alt={`Sucursal preview ${idx + 1}`} 
+                                  style={{ 
+                                    position: 'absolute', 
+                                    top: 0, 
+                                    left: 0, 
+                                    width: '100%', 
+                                    height: '100%', 
+                                    objectFit: 'cover' 
+                                  }} 
+                                />
+                                <button 
+                                  type="button" 
+                                  onClick={() => handleRemoveBranchPhotoPreview(idx)}
+                                  style={{ 
+                                    position: 'absolute', 
+                                    top: 3, 
+                                    right: 3, 
+                                    background: 'rgba(239, 68, 68, 0.9)', 
+                                    border: 'none', 
+                                    color: 'white', 
+                                    borderRadius: '50%', 
+                                    width: '18px', 
+                                    height: '18px', 
+                                    fontSize: '9px', 
+                                    display: 'flex', 
+                                    alignItems: 'center', 
+                                    justifyContent: 'center', 
+                                    cursor: 'pointer',
+                                    padding: 0,
+                                    zIndex: 3
+                                  }}
+                                  disabled={branchUploadingPhotos}
+                                >
+                                  ✕
+                                </button>
+                              </div>
+                            );
+                          } else {
+                            return (
+                              <div 
+                                key={idx} 
+                                style={{ 
+                                  position: 'relative', 
+                                  width: '100%', 
+                                  paddingBottom: '100%', 
+                                  borderRadius: 'var(--radius-md)', 
+                                  border: '1px dashed rgba(255, 255, 255, 0.15)',
+                                  background: 'rgba(255, 255, 255, 0.02)',
+                                  display: 'flex',
+                                  alignItems: 'center',
+                                  justifyContent: 'center',
+                                  cursor: 'pointer',
+                                  transition: 'all 0.2s'
+                                }}
+                                onMouseEnter={(e) => {
+                                  if (!branchUploadingPhotos) {
+                                    e.currentTarget.style.borderColor = 'var(--primary)';
+                                    e.currentTarget.style.background = 'rgba(255, 255, 255, 0.04)';
+                                  }
+                                }}
+                                onMouseLeave={(e) => {
+                                  e.currentTarget.style.borderColor = 'rgba(255, 255, 255, 0.15)';
+                                  e.currentTarget.style.background = 'rgba(255, 255, 255, 0.02)';
+                                }}
+                              >
+                                <input 
+                                  type="file" 
+                                  accept="image/*" 
+                                  onChange={handleBranchPhotosUpload}
+                                  style={{ 
+                                    position: 'absolute', 
+                                    top: 0, 
+                                    left: 0, 
+                                    width: '100%', 
+                                    height: '100%', 
+                                    opacity: 0, 
+                                    cursor: 'pointer',
+                                    zIndex: 2
+                                  }}
+                                  disabled={branchUploadingPhotos}
+                                />
+                                <div 
+                                  style={{ 
+                                    position: 'absolute',
+                                    top: 0,
+                                    left: 0,
+                                    right: 0,
+                                    bottom: 0,
+                                    display: 'flex', 
+                                    flexDirection: 'column', 
+                                    alignItems: 'center', 
+                                    justifyContent: 'center',
+                                    gap: '2px',
+                                    color: 'var(--text-muted)'
+                                  }}
+                                >
+                                  <span style={{ fontSize: '1.1rem', color: 'var(--text-secondary)' }}>+</span>
+                                  <span style={{ fontSize: '0.6rem' }}>Subir</span>
+                                </div>
+                              </div>
+                            );
+                          }
+                        })}
+                      </div>
+                    </div>
+
+                    <button type="submit" className={styles.formBtn} disabled={branchUploadingPhotos} style={{ marginTop: '10px' }}>
+                      {branchUploadingPhotos ? (
+                        "Registrando y subiendo fotos..."
+                      ) : (
+                        <><Plus size={18} /> Registrar Sucursal</>
+                      )}
+                    </button>
+                  </form>
+                </div>
+              </div>
+
+              {/* Lista (Derecha, 1fr) */}
+              <div className={`glass-panel ${styles.listPanel}`} style={{ borderRadius: 'var(--radius-lg)' }}>
+                <div className={styles.sectionHeader}>
+                  <h2 className={styles.sectionTitle}>Sucursales Activas</h2>
+                  <span className={styles.badge} style={{ background: 'var(--primary-glow)', color: 'var(--primary)', fontSize: '0.85rem', padding: '4px 10px' }}>
+                    {branches.length} operativas
+                  </span>
+                </div>
+                <div className={styles.tableWrapper}>
+                  <table className={styles.table}>
+                    <thead>
+                      <tr>
+                        <th>Nombre</th>
+                        <th>Dirección</th>
+                        <th>Teléfono principal</th>
+                        <th>Acción</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {branches.map((branch) => (
+                        <tr 
+                          key={branch.id} 
+                          onClick={() => setSelectedBranchDetail(branch)}
+                          style={{ cursor: 'pointer', transition: 'background 0.2s' }}
+                          onMouseEnter={(e) => e.currentTarget.style.background = 'rgba(255,255,255,0.03)'}
+                          onMouseLeave={(e) => e.currentTarget.style.background = ''}
+                        >
+                          <td style={{ fontWeight: 600 }}>{branch.name}</td>
+                          <td>
+                             {branch.address}
+                             {branch.mapLink && (
+                               <a 
+                                 href={branch.mapLink} 
+                                 target="_blank" 
+                                 rel="noopener noreferrer" 
+                                 onClick={(e) => e.stopPropagation()}
+                                 style={{ marginLeft: '8px', color: 'var(--primary)', textDecoration: 'underline', fontSize: '0.75rem', fontWeight: 600 }}
+                                 title="Abrir ubicación en Google Maps"
+                               >
+                                 (Ver Mapa)
+                               </a>
+                             )}
+                           </td>
+                          <td>{branch.phone || (branch.telefonos && branch.telefonos[0]) || 'S/T'}</td>
+                          <td>
+                            <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                              <button 
+                                className={styles.actionBtn}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleStartEditBranch(branch);
+                                  setSelectedBranchDetail(branch);
+                                }}
+                                style={{ width: 'fit-content', border: '1px solid rgba(99, 102, 241, 0.2)' }}
+                                onMouseEnter={(e) => e.currentTarget.style.background = 'rgba(99, 102, 241, 0.05)'}
+                                onMouseLeave={(e) => e.currentTarget.style.background = ''}
+                                title="Editar Sucursal"
+                              >
+                                <Edit2 size={15} style={{ color: '#6366f1' }} />
+                              </button>
+                              <button 
+                                className={`${styles.actionBtn} ${styles.btnDanger}`}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  if (window.confirm(`¿Estás seguro de que deseas eliminar la sucursal ${branch.name}?`)) {
+                                    removeBranch(branch.id);
+                                  }
+                                }}
+                                style={{ width: 'fit-content' }}
+                                title="Eliminar Sucursal"
+                              >
+                                <Trash2 size={15} />
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      ))}
+                      {branches.length === 0 && (
+                        <tr>
+                          <td colSpan={4} style={{ textAlign: 'center', padding: '30px', color: 'var(--text-muted)' }}>
+                            No hay sucursales registradas.
+                          </td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+            </div>
+          )}
+
+          
+          {/* TAB: CREAR BROKER */}
+          {activeTab === "create-broker" && isSuperAdmin && (
+            <div className={styles.deliveriesGrid}>
+              
+              {/* Formulario (Izquierda) */}
+              <div className={styles.sidebarPanel}>
+                <div className={`glass-panel ${styles.formCard}`}>
+                  <h3 className={styles.sectionTitle} style={{ marginBottom: "12px", display: "flex", alignItems: "center", gap: "8px" }}>
+                    <Users size={18} /> Registrar Broker
+                  </h3>
+                  <form onSubmit={handleCreateBroker} style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
+                    {brokerError && <div style={{ color: "var(--danger)", background: "var(--danger-glow)", padding: "8px 12px", borderRadius: "var(--radius-sm)", fontSize: "0.8rem", fontWeight: 500 }}>{brokerError}</div>}
+                    {brokerMessage && <div style={{ color: "var(--success)", background: "var(--success-glow)", padding: "8px 12px", borderRadius: "var(--radius-sm)", fontSize: "0.8rem", fontWeight: 500 }}>{brokerMessage}</div>}
+
+                    <div className={styles.formGroup}>
+                      <label className={styles.inputLabel}>Nombre Completo *</label>
+                      <input 
+                        type="text" 
+                        placeholder="Ej. Carlos Broker" 
+                        value={newBrokerName}
+                        onChange={(e) => setNewBrokerName(e.target.value)}
+                        className={styles.formInput}
+                        required
+                        disabled={brokerIsLoading}
+                      />
+                    </div>
+
+                    <div className={styles.formGroup}>
+                      <label className={styles.inputLabel}>Correo Electrónico *</label>
+                      <input 
+                        type="email" 
+                        placeholder="broker@reparto.com" 
+                        value={newBrokerEmail}
+                        onChange={(e) => setNewBrokerEmail(e.target.value)}
+                        className={styles.formInput}
+                        required
+                        disabled={brokerIsLoading}
+                      />
+                    </div>
+
+                    <div className={styles.formGroup}>
+                      <label className={styles.inputLabel}>Teléfono</label>
+                      <input 
+                        type="text" 
+                        placeholder="Ej. 5512345678" 
+                        value={newBrokerPhone}
+                        onChange={(e) => setNewBrokerPhone(e.target.value)}
+                        className={styles.formInput}
+                        disabled={brokerIsLoading}
+                      />
+                    </div>
+
+                    <div className={styles.formGroup}>
+                      <label className={styles.inputLabel}>Contraseña *</label>
+                      <input 
+                        type="password" 
+                        placeholder="••••••••" 
+                        value={newBrokerPassword}
+                        onChange={(e) => setNewBrokerPassword(e.target.value)}
+                        className={styles.formInput}
+                        required
+                        disabled={brokerIsLoading}
+                      />
+                    </div>
+
+                    <div className={styles.formGroup}>
+                      <label className={styles.inputLabel}>Empresas Asociadas (Exclusividad)</label>
+                      <select 
+                        multiple 
+                        value={newBrokerCompanies} 
+                        onChange={(e) => {
+                          const options = Array.from(e.target.selectedOptions);
+                          setNewBrokerCompanies(options.map(o => o.value));
+                        }}
+                        className={styles.formInput} 
+                        style={{ height: "auto", minHeight: "100px" }}
+                        disabled={brokerIsLoading}
+                      >
+                        {superAdminCompanies.map(c => (
+                          <option key={c.idEmpresa} value={c.idEmpresa}>{c.NombreEmpresa}</option>
+                        ))}
+                      </select>
+                      <p style={{ fontSize: "0.75rem", color: "var(--text-muted)", marginTop: "4px" }}>
+                        Mantén presionado Ctrl o Cmd para seleccionar varias.
+                      </p>
+                    </div>
+
+                    <button 
+                      type="submit" 
+                      className={`btn-primary ${styles.btnFull}`}
+                      disabled={brokerIsLoading}
+                      style={{ marginTop: "8px" }}
+                    >
+                      {brokerIsLoading ? "Registrando..." : "Registrar Broker"}
+                    </button>
+                  </form>
+                </div>
+              </div>
+
+              {/* Lista (Derecha) */}
+              <div className={styles.mainContent}>
+                <div className={`glass-panel ${styles.tableCard}`}>
+                  <h3 className={styles.sectionTitle} style={{ padding: "20px 24px 15px", margin: 0, borderBottom: "1px solid var(--border-color)", display: "flex", alignItems: "center", gap: "10px" }}>
+                    <ClipboardList size={20} style={{ color: "var(--primary)" }} /> Brokers Registrados ({brokersList.length})
+                  </h3>
+                  
+                  <div className={styles.tableContainer}>
+                    <table className={styles.table}>
+                      <thead>
+                        <tr>
+                          <th>Nombre</th>
+                          <th>Correo / Tel</th>
+                          <th>Empresas Asoc.</th>
+                          <th>Repartidores</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {brokersList.map((broker: any) => (
+                          <tr key={broker.id}>
+                            <td>
+                              <div style={{ fontWeight: 500, color: "var(--text-primary)" }}>{broker.name}</div>
+                            </td>
+                            <td>
+                              <div style={{ fontSize: "0.85rem", color: "var(--text-secondary)" }}>{broker.email}</div>
+                              <div style={{ fontSize: "0.8rem", color: "var(--text-muted)" }}>{broker.phone || "Sin teléfono"}</div>
+                            </td>
+                            <td>
+                              <div className={styles.statusBadge} style={{ background: "rgba(13, 148, 136, 0.15)", color: "var(--primary)" }}>
+                                {(broker.empresas_asociadas || []).length} Empresas
+                              </div>
+                            </td>
+                            <td>
+                              <div className={styles.statusBadge} style={{ background: "var(--bg-accent)", color: "var(--text-secondary)" }}>
+                                {(broker.repartidores_asociados || []).length} Repartidores
+                              </div>
+                            </td>
+                          </tr>
+                        ))}
+                        {brokersList.length === 0 && (
+                          <tr>
+                            <td colSpan={4} style={{ textAlign: 'center', padding: '30px', color: 'var(--text-muted)' }}>
+                              No hay brokers registrados aún.
+                            </td>
+                          </tr>
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* TAB 7: CREATE COMPANY */}
+          {activeTab === "create-company" && isSuperAdmin && (
+            <div style={{ display: "flex", flexDirection: "column", gap: "24px" }}>
+              <div className={styles.driversLayout}>
+                {/* Left Column: Form details */}
+                <div className="glass-panel" style={{ padding: "28px", borderRadius: "var(--radius-lg)", height: "fit-content" }}>
+                  <div style={{ marginBottom: "24px" }}>
+                    <h3 className={styles.sectionTitle} style={{ fontSize: "1.25rem", display: "flex", alignItems: "center", gap: "10px" }}>
+                      <Building size={22} style={{ color: "var(--primary)" }} /> {editingCompany ? "Editar Empresa" : "Configurar Nueva Empresa"}
+                    </h3>
+                    <p style={{ fontSize: "0.8rem", color: "var(--text-muted)", marginTop: "4px" }}>
+                      {editingCompany ? "Modifica los datos de la empresa seleccionada. El ID de la empresa no se puede cambiar." : "Registra una nueva empresa en la plataforma. Llena los campos obligatorios."}
+                    </p>
+                  </div>
+
+                  {compError && (
+                    <div style={{ color: "var(--danger)", fontSize: "0.85rem", padding: "12px 16px", background: "var(--danger-glow)", borderRadius: "var(--radius-md)", borderLeft: "4px solid var(--danger)", marginBottom: "20px" }}>
+                      {compError}
+                    </div>
+                  )}
+                  {compMessage && (
+                    <div style={{ color: "var(--success)", fontSize: "0.85rem", padding: "12px 16px", background: "var(--success-glow)", borderRadius: "var(--radius-md)", borderLeft: "4px solid var(--success)", marginBottom: "20px", fontWeight: 500 }}>
+                      {compMessage}
+                    </div>
+                  )}
+
+                  <form onSubmit={handleCreateCompany} className={styles.formGrid} style={{ gap: "20px" }}>
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "16px" }}>
+                      <div className={styles.formGroup}>
+                        <label className={styles.inputLabel}>Nombre de la Empresa *</label>
+                        <input 
+                          type="text" 
+                          placeholder="Ej. Mi Negocio Express" 
+                          value={newCompName}
+                          onChange={(e) => {
+                            setNewCompName(e.target.value);
+                            if (!newCompUrl || newCompUrl === slugify(newCompName)) {
+                              setNewCompUrl(slugify(e.target.value));
+                            }
+                          }}
+                          className={styles.formInput}
+                          required
+                          disabled={compIsLoading}
+                        />
+                      </div>
+
+                      <div className={styles.formGroup}>
+                        <label className={styles.inputLabel}>Propietario de la Empresa *</label>
+                        <input 
+                          type="text" 
+                          placeholder="Ej. Alejandro Pérez" 
+                          value={newCompOwner}
+                          onChange={(e) => setNewCompOwner(e.target.value)}
+                          className={styles.formInput}
+                          required
+                          disabled={compIsLoading}
+                        />
+                      </div>
+                    </div>
+
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "16px" }}>
+                      <div className={styles.formGroup}>
+                        <label className={styles.inputLabel}>Correo Electrónico *</label>
+                        <input 
+                          type="email" 
+                          placeholder="ejemplo@negocio.com" 
+                          value={newCompEmail}
+                          onChange={(e) => setNewCompEmail(e.target.value)}
+                          className={styles.formInput}
+                          required
+                          disabled={compIsLoading}
+                        />
+                      </div>
+
+                      <div className={styles.formGroup}>
+                        <label className={styles.inputLabel}>URL Identificador Único (Slug) *</label>
+                        <div style={{ display: "flex", gap: "8px" }}>
+                          <span style={{ display: "flex", alignItems: "center", padding: "0 10px", background: "rgba(255,255,255,0.04)", border: "1px solid var(--border-color)", borderRadius: "var(--radius-md) 0 0 var(--radius-md)", fontSize: "0.75rem", color: "var(--text-muted)", borderRight: "none" }}>
+                            reparto.mx/
+                          </span>
+                          <input 
+                            type="text" 
+                            placeholder="mi-negocio-express" 
+                            value={newCompUrl}
+                            onChange={(e) => setNewCompUrl(slugify(e.target.value))}
+                            className={styles.formInput}
+                            style={{ borderRadius: "0 var(--radius-md) var(--radius-md) 0", flexGrow: 1 }}
+                            required
+                            disabled={compIsLoading}
+                          />
+                        </div>
+                      </div>
+                    </div>
+
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "16px" }}>
+                      <div className={styles.formGroup}>
+                        <label className={styles.inputLabel}>Dirección de la Empresa</label>
+                        <input 
+                          type="text" 
+                          placeholder="Ej. Av. de la Reforma 222, Juárez, CDMX" 
+                          value={newCompAddress}
+                          onChange={(e) => setNewCompAddress(e.target.value)}
+                          className={styles.formInput}
+                          disabled={compIsLoading}
+                        />
+                      </div>
+                      <div className={styles.formGroup}>
+                        <label className={styles.inputLabel}>Descripción de la Empresa</label>
+                        <input 
+                          type="text" 
+                          placeholder="Ej. Pizzería artesanal con servicio a domicilio." 
+                          value={newCompDesc}
+                          onChange={(e) => setNewCompDesc(e.target.value)}
+                          className={styles.formInput}
+                          disabled={compIsLoading}
+                        />
+                      </div>
+                    </div>
+
+                    {!editingCompany && (
+                      <div className={styles.formGroup}>
+                        <label className={styles.inputLabel}>Contraseña del Administrador *</label>
+                        <input 
+                          type="password" 
+                          placeholder="••••••••" 
+                          value={newCompPassword}
+                          onChange={(e) => setNewCompPassword(e.target.value)}
+                          className={styles.formInput}
+                          required
+                          disabled={compIsLoading}
+                          minLength={6}
+                        />
+                      </div>
+                    )}
+
+                    <div className={styles.formGroup} style={{ borderTop: "1px solid rgba(255,255,255,0.06)", paddingTop: "20px", marginTop: "10px" }}>
+                      {editingCompany ? (
+                        <>
+                          <label className={styles.inputLabel}>ID Empresa (No Editable)</label>
+                          <input 
+                            type="text" 
+                            value={editingCompany.idEmpresa}
+                            readOnly
+                            className={styles.formInput}
+                            style={{ background: "rgba(255,255,255,0.02)", fontFamily: "var(--font-mono)", fontSize: "0.95rem", color: "var(--text-secondary)", cursor: "not-allowed", borderStyle: "dashed" }}
+                          />
+                        </>
+                      ) : (
+                        <div style={{ background: "rgba(255,255,255,0.02)", border: "1px dashed var(--border-color)", padding: "14px", borderRadius: "var(--radius-md)" }}>
+                          <span style={{ fontSize: "0.78rem", color: "var(--text-muted)", display: "flex", alignItems: "center", gap: "6px" }}>
+                            🔒 El sistema generará automáticamente un identificador de 8 caracteres con dígitos y caracteres especiales para esta empresa al momento de registrarla.
+                          </span>
+                        </div>
+                      )}
+                    </div>
+
+                    <div style={{ display: "flex", gap: "12px", marginTop: "10px" }}>
+                      <button 
+                        type="submit" 
+                        className={styles.formBtn} 
+                        style={{ flexGrow: 1, padding: "12px", fontSize: "0.95rem", margin: 0 }} 
+                        disabled={compIsLoading}
+                      >
+                        {compIsLoading ? "Procesando..." : (editingCompany ? "Actualizar Empresa" : "Registrar Empresa")}
+                      </button>
+                      {editingCompany && (
+                        <button 
+                          type="button" 
+                          onClick={resetCompanyForm}
+                          className={styles.actionBtn} 
+                          style={{ padding: "0 20px", fontSize: "0.95rem", height: "auto", margin: 0 }} 
+                          disabled={compIsLoading}
+                        >
+                          Cancelar
+                        </button>
+                      )}
+                    </div>
+                  </form>
+                </div>
+
+                {/* Right Column: Logo & Phones list */}
+                <div style={{ display: "flex", flexDirection: "column", gap: "24px" }}>
+                  {/* Logo Upload Panel */}
+                  <div className="glass-panel" style={{ padding: "20px", borderRadius: "var(--radius-lg)" }}>
+                    <h4 className={styles.inputLabel} style={{ marginBottom: "12px" }}>Logotipo Oficial (1:1)</h4>
+                    
+                    <div style={{
+                      border: "2px dashed var(--border-color)",
+                      borderRadius: "var(--radius-lg)",
+                      padding: "20px",
+                      textAlign: "center",
+                      position: "relative",
+                      background: "rgba(0,0,0,0.01)",
+                      transition: "border-color 0.2s",
+                      display: "flex",
+                      flexDirection: "column",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      minHeight: "180px"
+                    }}>
+                      {newCompLogoPreview ? (
+                        <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: "12px" }}>
+                          <img 
+                            src={newCompLogoPreview} 
+                            alt="Previsualización Logo" 
+                            style={{ width: "120px", height: "120px", borderRadius: "var(--radius-md)", objectFit: "cover", border: "1px solid var(--border-color)" }} 
+                          />
+                          <button 
+                            type="button" 
+                            onClick={() => { setNewCompLogoPreview(""); setNewCompLogoFile(null); }}
+                            style={{ fontSize: "0.75rem", color: "var(--danger)", background: "rgba(239, 68, 68, 0.08)", border: "1px solid rgba(239, 68, 68, 0.15)", borderRadius: "var(--radius-sm)", padding: "4px 10px", cursor: "pointer" }}
+                            disabled={compIsLoading}
+                          >
+                            Remover logotipo
+                          </button>
+                        </div>
+                      ) : (
+                        <label style={{ cursor: "pointer", width: "100%", display: "flex", flexDirection: "column", alignItems: "center", gap: "10px" }}>
+                          <Upload size={32} style={{ color: "var(--text-muted)" }} />
+                          <span style={{ fontSize: "0.8rem", color: "var(--text-secondary)", fontWeight: 500 }}>
+                            Subir logo de la empresa
+                          </span>
+                          <span style={{ fontSize: "0.68rem", color: "var(--text-muted)" }}>
+                            Máximo 1000x1000 píxeles. Proporción cuadrada 1:1 obligatoria.
+                          </span>
+                          <input 
+                            type="file" 
+                            accept="image/*" 
+                            onChange={handleCompLogoUpload}
+                            style={{ display: "none" }}
+                            disabled={compIsLoading}
+                          />
+                        </label>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Phones List Panel */}
+                  <div className="glass-panel" style={{ padding: "20px", borderRadius: "var(--radius-lg)" }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "12px" }}>
+                      <h4 className={styles.inputLabel} style={{ margin: 0 }}>Teléfonos de Propietarios</h4>
+                      <button 
+                        type="button" 
+                        onClick={handleAddCompPhone}
+                        disabled={newCompPhones.length >= 3 || compIsLoading}
+                        style={{
+                          background: "var(--primary-glow)",
+                          border: "1px solid rgba(247, 52, 12, 0.15)",
+                          color: "var(--primary)",
+                          padding: "4px 8px",
+                          borderRadius: "var(--radius-sm)",
+                          fontSize: "0.72rem",
+                          fontWeight: 600,
+                          cursor: "pointer",
+                          display: "flex",
+                          alignItems: "center",
+                          gap: "4px"
+                        }}
+                      >
+                        <Plus size={12} /> Agregar ({newCompPhones.length}/3)
+                      </button>
+                    </div>
+
+                    <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
+                      {newCompPhones.map((phone, idx) => (
+                        <div key={idx} style={{ display: "flex", gap: "8px", alignItems: "center" }}>
+                          <input 
+                            type="tel" 
+                            placeholder={`Teléfono del propietario ${idx + 1}`} 
+                            value={phone}
+                            onChange={(e) => handleCompPhoneChange(idx, e.target.value)}
+                            className={styles.formInput}
+                            style={{ flexGrow: 1 }}
+                            disabled={compIsLoading}
+                          />
+                          <button 
+                            type="button" 
+                            onClick={() => handleRemoveCompPhone(idx)}
+                            style={{
+                              background: "rgba(255,255,255,0.03)",
+                              border: "1px solid var(--border-color)",
+                              color: "var(--text-muted)",
+                              width: "38px",
+                              height: "38px",
+                              borderRadius: "var(--radius-md)",
+                              cursor: "pointer",
+                              display: "flex",
+                              alignItems: "center",
+                              justifyContent: "center"
+                            }}
+                            disabled={compIsLoading}
+                            onMouseEnter={(e) => e.currentTarget.style.color = "var(--danger)"}
+                            onMouseLeave={(e) => e.currentTarget.style.color = "var(--text-muted)"}
+                          >
+                            <Trash2 size={16} />
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                    <span style={{ fontSize: "0.7rem", color: "var(--text-muted)", display: "block", marginTop: "10px" }}>
+                      * Se pueden registrar hasta 3 teléfonos.
+                    </span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Companies List View */}
+              <div className="glass-panel" style={{ padding: "24px", borderRadius: "var(--radius-lg)" }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "16px" }}>
+                  <div>
+                    <h3 className={styles.sectionTitle} style={{ fontSize: "1.1rem", display: "flex", alignItems: "center", gap: "8px" }}>
+                      <Building size={18} style={{ color: "var(--primary)" }} /> Empresas Registradas
+                    </h3>
+                    <p style={{ fontSize: "0.75rem", color: "var(--text-muted)", marginTop: "2px" }}>
+                      Listado de organizaciones asociadas en la plataforma de reparto.
+                    </p>
+                  </div>
+                  <span className={styles.badge} style={{ background: 'var(--primary-glow)', color: 'var(--primary)', fontSize: '0.8rem', padding: '4px 10px' }}>
+                    {superAdminCompanies.length} empresas
+                  </span>
+                </div>
+
+                <div className={styles.tableWrapper}>
+                  <table className={styles.table}>
+                    <thead>
+                      <tr>
+                        <th>Logo</th>
+                        <th>ID Empresa</th>
+                        <th>Nombre</th>
+                        <th>Descripción</th>
+                        <th>Dirección</th>
+                        <th>Propietario</th>
+                        <th>Email</th>
+                        <th>Slug</th>
+                        <th>Teléfonos</th>
+                        <th style={{ textAlign: "right" }}>Acción</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {superAdminCompanies.map((comp, idx) => (
+                        <tr key={`${comp.idEmpresa}-${idx}`} style={{ transition: "background 0.2s" }} onMouseEnter={(e) => e.currentTarget.style.background = 'rgba(255,255,255,0.02)'} onMouseLeave={(e) => e.currentTarget.style.background = ''}>
+                          <td>
+                            <img 
+                              src={comp.logoEmpresa || comp.foto_empresa || "https://images.unsplash.com/photo-1516880711640-ef7db81be3e1?w=100&auto=format&fit=crop"} 
+                              alt="Logo" 
+                              style={{ width: "36px", height: "36px", borderRadius: "4px", objectFit: "cover", border: "1px solid var(--border-color)" }} 
+                            />
+                          </td>
+                          <td style={{ fontFamily: "var(--font-mono)", fontSize: "0.8rem", color: "var(--text-muted)" }}>
+                            {comp.idEmpresa}
+                          </td>
+                          <td style={{ fontWeight: 600, color: "var(--text-primary)" }}>
+                            {comp.NombreEmpresa || comp.Nombre_Empresa}
+                          </td>
+                          <td style={{ fontSize: "0.8rem", color: "var(--text-secondary)", maxWidth: "200px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={comp.DescripcionEmpresa || ""}>
+                            {comp.DescripcionEmpresa || <span style={{ color: "var(--text-muted)", fontStyle: "italic" }}>Sin descripción</span>}
+                          </td>
+                          <td style={{ fontSize: "0.8rem", color: "var(--text-secondary)", maxWidth: "180px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={comp.DireccionEmpresa || ""}>
+                            {comp.DireccionEmpresa || <span style={{ color: "var(--text-muted)", fontStyle: "italic" }}>Sin dirección</span>}
+                          </td>
+                          <td>
+                            {comp.PropietarioEmpresa || comp.PropietarioEmpres || comp.PropietarioEmpresaNombre || "N/A"}
+                          </td>
+                          <td style={{ fontSize: "0.8rem" }}>
+                            {comp.mailEmpresa || "N/A"}
+                          </td>
+                          <td style={{ fontSize: "0.8rem", color: "var(--primary)" }}>
+                            reparto.mx/{comp.urlEmpresaUnico || ""}
+                          </td>
+                          <td>
+                            {comp.TelefonosEmpresa && comp.TelefonosEmpresa.length > 0 ? (
+                              <div style={{ display: "flex", gap: "4px", flexWrap: "wrap" }}>
+                                {comp.TelefonosEmpresa.map((p: string, idx: number) => (
+                                  <span key={idx} style={{ background: "rgba(255,255,255,0.04)", border: "1px solid var(--border-color)", padding: "2px 6px", borderRadius: "4px", fontSize: "0.7rem" }}>
+                                    {p}
+                                  </span>
+                                ))}
+                              </div>
+                            ) : (
+                              <span style={{ fontSize: "0.75rem", color: "var(--text-muted)", fontStyle: "italic" }}>Sin teléfonos</span>
+                            )}
+                          </td>
+                           <td style={{ textAlign: "right" }}>
+                             <div style={{ display: "flex", gap: "8px", justifyContent: "flex-end" }}>
+                               <button 
+                                 type="button" 
+                                 onClick={() => handleEditCompanyClick(comp)}
+                                 style={{
+                                   background: "rgba(255,255,255,0.03)",
+                                   border: "1px solid var(--border-color)",
+                                   color: "var(--text-secondary)",
+                                   padding: "6px 12px",
+                                   borderRadius: "var(--radius-sm)",
+                                   fontSize: "0.75rem",
+                                   fontWeight: 600,
+                                   cursor: "pointer",
+                                   transition: "all 0.2s"
+                                 }}
+                                 onMouseEnter={(e) => {
+                                   e.currentTarget.style.borderColor = "var(--primary)";
+                                   e.currentTarget.style.color = "var(--primary)";
+                                 }}
+                                 onMouseLeave={(e) => {
+                                   e.currentTarget.style.borderColor = "var(--border-color)";
+                                   e.currentTarget.style.color = "var(--text-secondary)";
+                                 }}
+                               >
+                                 Editar
+                               </button>
+                               <button 
+                                 type="button" 
+                                 onClick={() => handleDeleteCompanyClick(comp.idEmpresa, comp.NombreEmpresa || comp.Nombre_Empresa)}
+                                 style={{
+                                   background: "rgba(239, 68, 68, 0.05)",
+                                   border: "1px solid rgba(239, 68, 68, 0.2)",
+                                   color: "var(--danger)",
+                                   padding: "6px 12px",
+                                   borderRadius: "var(--radius-sm)",
+                                   fontSize: "0.75rem",
+                                   fontWeight: 600,
+                                   cursor: "pointer",
+                                   transition: "all 0.2s"
+                                 }}
+                                 onMouseEnter={(e) => {
+                                   e.currentTarget.style.background = "var(--danger)";
+                                   e.currentTarget.style.color = "white";
+                                 }}
+                                 onMouseLeave={(e) => {
+                                   e.currentTarget.style.background = "rgba(239, 68, 68, 0.05)";
+                                   e.currentTarget.style.color = "var(--danger)";
+                                 }}
+                               >
+                                 Eliminar
+                               </button>
+                             </div>
+                           </td>
+                        </tr>
+                      ))}
+                      {superAdminCompanies.length === 0 && (
+                        <tr>
+                          <td colSpan={8} style={{ textAlign: "center", padding: "24px", color: "var(--text-muted)" }}>
+                            No hay empresas registradas.
+                          </td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+          )}
+
+
+          {selectedBranchDetail && (
+            <div 
+              style={{
+                position: 'fixed',
+                top: 0,
+                left: 0,
+                right: 0,
+                bottom: 0,
+                background: 'rgba(0,0,0,0.4)',
+                backdropFilter: 'blur(4px)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                zIndex: 9999,
+                padding: '20px'
+              }}
+              onClick={() => {
+                setSelectedBranchDetail(null);
+                setIsEditingBranch(false);
+              }}
+            >
+              <div 
+                className="glass-panel"
+                style={{
+                  width: '100%',
+                  maxWidth: '550px',
+                  maxHeight: '90vh',
+                  overflowY: 'auto',
+                  background: '#ffffff',
+                  border: '1px solid #cbd5e1',
+                  borderRadius: 'var(--radius-lg)',
+                  boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04)',
+                  padding: '28px',
+                  position: 'relative',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: '20px',
+                  scrollbarWidth: 'thin'
+                }}
+                onClick={(e) => e.stopPropagation()}
+              >
+                {/* Header */}
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid #e2e8f0', paddingBottom: '16px' }}>
+                  <div>
+                    <h3 style={{ fontSize: '1.3rem', fontWeight: 700, color: '#1e293b', margin: 0 }}>
+                      {isEditingBranch ? "Editar Sucursal" : selectedBranchDetail.name}
+                    </h3>
+                    <span style={{ fontSize: '0.8rem', color: '#64748b' }}>
+                      {isEditingBranch ? "Modifica los datos y tarifas de la sucursal" : "Detalles e Información de Sucursal"}
+                    </span>
+                  </div>
+                  <button 
+                    onClick={() => {
+                      setSelectedBranchDetail(null);
+                      setIsEditingBranch(false);
+                    }}
+                    style={{
+                      background: '#f1f5f9',
+                      border: 'none',
+                      color: '#475569',
+                      width: '32px',
+                      height: '32px',
+                      borderRadius: '50%',
+                      cursor: 'pointer',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      fontSize: '1rem',
+                      transition: 'background 0.2s'
+                    }}
+                    onMouseEnter={(e) => e.currentTarget.style.background = '#e2e8f0'}
+                    onMouseLeave={(e) => e.currentTarget.style.background = '#f1f5f9'}
+                  >
+                    ✕
+                  </button>
+                </div>
+
+                {/* Body Content */}
+                {isEditingBranch ? (
+                  <form onSubmit={handleSaveBranchEdit} style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                    <div className={styles.formGroup}>
+                      <label className={styles.inputLabel} style={{ color: '#475569' }}>Nombre de la Sucursal</label>
+                      <input 
+                        type="text" 
+                        required
+                        className={styles.formInput}
+                        value={editBranchName}
+                        onChange={(e) => setEditBranchName(e.target.value)}
+                        style={{ background: '#f8fafc', color: '#1e293b', borderColor: '#cbd5e1' }}
+                      />
+                    </div>
+                    <div className={styles.formGroup} style={{ position: 'relative' }}>
+                      <label className={styles.inputLabel} style={{ color: '#475569' }}>Dirección</label>
+                      <input 
+                        type="text" 
+                        required
+                        className={styles.formInput}
+                        value={editBranchAddress}
+                        onChange={(e) => setEditBranchAddress(e.target.value)}
+                        onFocus={() => setShowEditBranchSuggestions(true)}
+                        onBlur={() => setTimeout(() => setShowEditBranchSuggestions(false), 250)}
+                        style={{ background: '#f8fafc', color: '#1e293b', borderColor: '#cbd5e1' }}
+                      />
+                      {isLoadingEditBranchSuggestions && (
+                        <div style={{ position: 'absolute', right: '12px', top: '35px', fontSize: '0.7rem', color: 'var(--primary)' }}>
+                          Buscando...
+                        </div>
+                      )}
+                      {showEditBranchSuggestions && editBranchSuggestions.length > 0 && (
+                        <ul style={{
+                          position: 'absolute',
+                          top: '100%',
+                          left: 0,
+                          right: 0,
+                          background: '#ffffff',
+                          border: '1px solid #cbd5e1',
+                          borderRadius: 'var(--radius-md)',
+                          boxShadow: '0 10px 25px rgba(0, 0, 0, 0.1)',
+                          zIndex: 100,
+                          listStyle: 'none',
+                          padding: '4px 0',
+                          margin: '4px 0 0 0',
+                          maxHeight: '180px',
+                          overflowY: 'auto'
+                        }}>
+                          {editBranchSuggestions.map((s, idx) => (
+                            <li 
+                              key={idx}
+                              onMouseDown={() => {
+                                editBranchAddressSelectedFromListRef.current = true;
+                                setEditBranchAddress(s.place_name);
+                                setEditBranchLat(s.center[1]);
+                                setEditBranchLng(s.center[0]);
+                                setShowEditBranchSuggestions(false);
+                              }}
+                              style={{
+                                padding: '8px 12px',
+                                fontSize: '0.8rem',
+                                color: '#1e293b',
+                                cursor: 'pointer',
+                                borderBottom: idx < editBranchSuggestions.length - 1 ? '1px solid #f1f5f9' : 'none',
+                                transition: 'background 0.2s'
+                              }}
+                              onMouseEnter={(e) => e.currentTarget.style.background = '#f1f5f9'}
+                              onMouseLeave={(e) => e.currentTarget.style.background = ''}
+                            >
+                              📍 {s.place_name}
+                            </li>
+                          ))}
+                        </ul>
+                      )}
+                    </div>
+
+                    <div className={styles.formGroup}>
+                      <label className={styles.inputLabel} style={{ color: '#475569' }}>Enlace de Google Maps (Ubicación)</label>
+                      <input 
+                        type="url" 
+                        placeholder="Ej. https://maps.google.com/?q=..."
+                        className={styles.formInput}
+                        value={editBranchMapLink}
+                        onChange={(e) => setEditBranchMapLink(e.target.value)}
+                        style={{ background: '#f8fafc', color: '#1e293b', borderColor: '#cbd5e1' }}
+                      />
+                    </div>
+
+                    <div className={styles.formGroup}>
+                      <label className={styles.inputLabel} style={{ color: '#475569' }}>Estado</label>
+                      <select
+                        className={styles.formInput}
+                        value={editBranchStatus}
+                        onChange={(e) => setEditBranchStatus(e.target.value as "active" | "inactive")}
+                        style={{ width: '100%', background: '#f8fafc', color: '#1e293b', borderColor: '#cbd5e1' }}
+                      >
+                        <option value="active">Activa</option>
+                        <option value="inactive">Inactiva</option>
+                      </select>
+                    </div>
+
+                    {/* Teléfonos Dinámicos (Editar) */}
+                    <div className={styles.formGroup}>
+                      <label className={styles.inputLabel} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                        <span style={{ color: '#475569' }}>Teléfonos</span>
+                        <button
+                          type="button"
+                          onClick={() => setEditBranchPhones(prev => [...prev, ""])}
+                          style={{
+                            background: 'var(--primary-glow)',
+                            border: '1px solid rgba(247, 52, 12, 0.15)',
+                            color: 'var(--primary)',
+                            padding: '2px 8px',
+                            borderRadius: 'var(--radius-sm)',
+                            fontSize: '0.72rem',
+                            fontWeight: 600,
+                            cursor: 'pointer'
+                          }}
+                        >
+                          + Agregar
+                        </button>
+                      </label>
+                      {editBranchPhones.map((phone, idx) => (
+                        <div key={idx} style={{ display: 'flex', gap: '8px', marginBottom: '6px' }}>
+                          <input 
+                            type="text" 
+                            required={idx === 0} 
+                            className={styles.formInput}
+                            value={phone}
+                            onChange={(e) => {
+                              const updated = [...editBranchPhones];
+                              updated[idx] = e.target.value;
+                              setEditBranchPhones(updated);
+                            }}
+                            style={{ flex: 1, background: '#f8fafc', color: '#1e293b', borderColor: '#cbd5e1' }}
+                          />
+                          {editBranchPhones.length > 1 && (
+                            <button
+                              type="button"
+                              onClick={() => setEditBranchPhones(prev => prev.filter((_, i) => i !== idx))}
+                              style={{
+                                background: 'rgba(239, 68, 68, 0.1)',
+                                color: '#ef4444',
+                                border: '1px solid rgba(239, 68, 68, 0.15)',
+                                borderRadius: 'var(--radius-md)',
+                                padding: '0 10px'
+                              }}
+                            >
+                              ✕
+                            </button>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+
+                    {/* Tarifas de Envío (Editar) */}
+                    <div className={styles.formGroup} style={{ borderTop: '1px solid #e2e8f0', paddingTop: '14px' }}>
+                      <label className={styles.inputLabel} style={{ marginBottom: '8px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                        <span style={{ color: '#475569' }}>Tarifas de Envío por Distancia</span>
+                        <button
+                          type="button"
+                          onClick={() => setEditBranchRates(prev => [...prev, { min_km: undefined, max_km: undefined, precio: undefined }])}
+                          style={{
+                            background: 'var(--primary-glow)',
+                            border: '1px solid rgba(247, 52, 12, 0.15)',
+                            color: 'var(--primary)',
+                            padding: '2px 8px',
+                            borderRadius: 'var(--radius-sm)',
+                            fontSize: '0.72rem',
+                            fontWeight: 600,
+                            cursor: 'pointer'
+                          }}
+                        >
+                          + Agregar Rango
+                        </button>
+                      </label>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', maxHeight: '180px', overflowY: 'auto', paddingRight: '4px', marginBottom: '10px' }}>
+                        {editBranchRates.map((rate, idx) => (
+                          <div key={idx} style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+                            <div style={{ flex: 1, display: 'flex', gap: '4px', alignItems: 'center' }}>
+                              <input 
+                                type="number" 
+                                step="any"
+                                required 
+                                placeholder="Desde"
+                                className={styles.formInput}
+                                value={rate.min_km ?? ""}
+                                onChange={(e) => {
+                                  const updated = [...editBranchRates];
+                                  updated[idx] = { ...updated[idx], min_km: e.target.value === "" ? undefined : Number(e.target.value) };
+                                  setEditBranchRates(updated);
+                                }}
+                                style={{ width: '65px', padding: '6px 8px', fontSize: '0.8rem', background: '#f8fafc', color: '#1e293b', borderColor: '#cbd5e1' }}
+                              />
+                              <span style={{ color: '#64748b', fontSize: '0.75rem', alignSelf: 'center' }}>a</span>
+                              <input 
+                                type="number" 
+                                step="any"
+                                required 
+                                placeholder="Hasta"
+                                className={styles.formInput}
+                                value={rate.max_km ?? ""}
+                                onChange={(e) => {
+                                  const updated = [...editBranchRates];
+                                  updated[idx] = { ...updated[idx], max_km: e.target.value === "" ? undefined : Number(e.target.value) };
+                                  setEditBranchRates(updated);
+                                }}
+                                style={{ width: '65px', padding: '6px 8px', fontSize: '0.8rem', background: '#f8fafc', color: '#1e293b', borderColor: '#cbd5e1' }}
+                              />
+                              <span style={{ color: '#64748b', fontSize: '0.75rem', alignSelf: 'center' }}>km</span>
+                            </div>
+                            <div style={{ width: '95px', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                              <span style={{ color: 'var(--success)', fontSize: '0.8rem', fontWeight: 600 }}>$</span>
+                              <input 
+                                type="number" 
+                                required 
+                                placeholder="Precio"
+                                className={styles.formInput}
+                                value={rate.precio ?? ""}
+                                onChange={(e) => {
+                                  const updated = [...editBranchRates];
+                                  updated[idx] = { ...updated[idx], precio: e.target.value === "" ? undefined : Number(e.target.value) };
+                                  setEditBranchRates(updated);
+                                }}
+                                style={{ flex: 1, padding: '6px 8px', fontSize: '0.8rem', background: '#f8fafc', color: '#1e293b', borderColor: '#cbd5e1' }}
+                              />
+                            </div>
+                            {editBranchRates.length > 1 && (
+                              <button
+                                type="button"
+                                onClick={() => setEditBranchRates(prev => prev.filter((_, i) => i !== idx))}
+                                style={{
+                                  background: 'rgba(239, 68, 68, 0.08)',
+                                  color: '#ef4444',
+                                  border: '1px solid rgba(239, 68, 68, 0.15)',
+                                  borderRadius: 'var(--radius-md)',
+                                  width: '28px',
+                                  height: '28px',
+                                  display: 'flex',
+                                  alignItems: 'center',
+                                  justifyContent: 'center',
+                                  cursor: 'pointer'
+                                }}
+                              >
+                                <Trash2 size={12} />
+                              </button>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                      
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: '#f8fafc', padding: '8px 12px', borderRadius: 'var(--radius-md)', border: '1px solid #e2e8f0' }}>
+                        <span style={{ fontSize: '0.8rem', color: '#475569' }}>Precio por Km Extra</span>
+                        <div style={{ width: '100px', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                          <span style={{ color: 'var(--primary)', fontSize: '0.8rem', fontWeight: 600 }}>$</span>
+                          <input 
+                            type="number" 
+                            required 
+                            placeholder="10"
+                            className={styles.formInput}
+                            value={editBranchExtraKmPrice}
+                            onChange={(e) => setEditBranchExtraKmPrice(e.target.value)}
+                            style={{ flex: 1, padding: '6px 8px', fontSize: '0.8rem', background: '#f8fafc', color: '#1e293b', borderColor: '#cbd5e1' }}
+                          />
+                        </div>
+                      </div>
+                    </div>
+
+                    <div style={{ display: 'flex', gap: '12px', marginTop: '10px' }}>
+                      <button type="submit" className={styles.formBtn} style={{ flex: 1 }}>
+                        Guardar Cambios
+                      </button>
+                      <button 
+                        type="button" 
+                        onClick={() => setIsEditingBranch(false)}
+                        style={{
+                          background: '#f1f5f9',
+                          border: '1px solid #cbd5e1',
+                          color: '#475569',
+                          padding: '10px 16px',
+                          borderRadius: 'var(--radius-md)',
+                          cursor: 'pointer',
+                          flex: 1
+                        }}
+                      >
+                        Cancelar
+                      </button>
+                    </div>
+                  </form>
+                ) : (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                    {/* Address */}
+                    <div>
+                      <strong style={{ display: 'block', fontSize: '0.8rem', color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '4px' }}>
+                        Dirección
+                      </strong>
+                      <span style={{ fontSize: '0.95rem', color: '#1e293b' }}>
+                        {selectedBranchDetail.address}
+                      </span>
+                      {selectedBranchDetail.mapLink && (
+                        <div style={{ marginTop: '6px' }}>
+                          <a 
+                            href={selectedBranchDetail.mapLink} 
+                            target="_blank" 
+                            rel="noopener noreferrer"
+                            style={{ 
+                              fontSize: '0.82rem', 
+                              color: 'var(--primary)', 
+                              textDecoration: 'underline', 
+                              display: 'inline-flex', 
+                              alignItems: 'center', 
+                              gap: '4px',
+                              fontWeight: 600
+                            }}
+                          >
+                            📍 Ver ubicación en Google Maps
+                          </a>
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Status Availability */}
+                    <div>
+                      <strong style={{ display: 'block', fontSize: '0.8rem', color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '6px' }}>
+                        Estado
+                      </strong>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                        <span 
+                          style={{
+                            display: 'inline-block',
+                            width: '10px',
+                            height: '10px',
+                            borderRadius: '50%',
+                            background: selectedBranchDetail.status === 'active' ? 'var(--success)' : 'var(--danger)'
+                          }}
+                        />
+                        <span style={{ fontSize: '0.9rem', fontWeight: 600, color: selectedBranchDetail.status === 'active' ? 'var(--success)' : 'var(--danger)' }}>
+                          {selectedBranchDetail.status === 'active' ? 'Operativa / Activa' : 'Inactiva / No disponible'}
+                        </span>
+                      </div>
+                    </div>
+
+                    {/* Registered Phones */}
+                    <div>
+                      <strong style={{ display: 'block', fontSize: '0.8rem', color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '8px' }}>
+                        Teléfonos Registrados
+                      </strong>
+                      {selectedBranchDetail.telefonos && selectedBranchDetail.telefonos.length > 0 ? (
+                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
+                          {selectedBranchDetail.telefonos.map((phone, idx) => (
+                            <div 
+                              key={idx}
+                              style={{
+                                background: '#f8fafc',
+                                border: '1px solid #cbd5e1',
+                                padding: '8px 12px',
+                                borderRadius: 'var(--radius-md)',
+                                fontSize: '0.85rem',
+                                color: '#334155',
+                                display: 'flex',
+                                alignItems: 'center',
+                                gap: '6px'
+                              }}
+                            >
+                              <span style={{ color: 'var(--primary)' }}>📞</span> {phone}
+                            </div>
+                          ))}
+                        </div>
+                      ) : (
+                        <span style={{ fontSize: '0.9rem', color: '#64748b', fontStyle: 'italic' }}>
+                          {selectedBranchDetail.phone || 'No hay teléfonos registrados.'}
+                        </span>
+                      )}
+                    </div>
+
+                    {/* Branch Rates Display */}
+                    <div>
+                      <strong style={{ display: 'block', fontSize: '0.8rem', color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '8px' }}>
+                        Tarifas de Envío (Conductor)
+                      </strong>
+                      {selectedBranchDetail.tarifas && selectedBranchDetail.tarifas.length > 0 ? (
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', background: '#f8fafc', padding: '12px', borderRadius: 'var(--radius-md)', border: '1px solid #cbd5e1' }}>
+                          {selectedBranchDetail.tarifas.map((rate, idx) => {
+                            if (rate.km_extra) {
+                              return (
+                                <div key={idx} style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.85rem', color: '#475569', borderTop: '1px solid #e2e8f0', paddingTop: '6px', marginTop: '2px' }}>
+                                  <span>Kilómetro extra:</span>
+                                  <span style={{ fontWeight: 600, color: 'var(--primary)' }}>${rate.precio_por_km}/km</span>
+                                </div>
+                              );
+                            }
+                            return (
+                              <div key={idx} style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.85rem', color: '#334155' }}>
+                                <span>De {rate.min_km} a {rate.max_km} km:</span>
+                                <span style={{ fontWeight: 600, color: 'var(--success)' }}>${rate.precio}</span>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      ) : (
+                        <span style={{ fontSize: '0.9rem', color: '#64748b', fontStyle: 'italic' }}>
+                          Sin tarifas configuradas (se usarán valores por defecto).
+                        </span>
+                      )}
+                    </div>
+
+                    {/* Branch Photos Gallery */}
+                    <div>
+                      <strong style={{ display: 'block', fontSize: '0.8rem', color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '10px' }}>
+                        Galería de Fotos
+                      </strong>
+                      {selectedBranchDetail.fotos && selectedBranchDetail.fotos.length > 0 ? (
+                        <div 
+                          style={{
+                            display: 'grid',
+                            gridTemplateColumns: 'repeat(auto-fill, minmax(110px, 1fr))',
+                            gap: '10px',
+                            maxHeight: '190px',
+                            overflowY: 'auto',
+                            paddingRight: '4px'
+                          }}
+                        >
+                          {selectedBranchDetail.fotos.map((url, idx) => (
+                            <img 
+                              key={idx}
+                              src={url}
+                              alt={`Sucursal ${idx + 1}`}
+                              onClick={() => setSelectedPreviewPhoto(url)}
+                              style={{
+                                width: '100%',
+                                height: '80px',
+                                objectFit: 'cover',
+                                borderRadius: 'var(--radius-md)',
+                                border: '1px solid #e2e8f0',
+                                cursor: 'zoom-in',
+                                transition: 'transform 0.2s, border-color 0.2s'
+                              }}
+                              onMouseEnter={(e) => {
+                                e.currentTarget.style.transform = 'scale(1.05)';
+                                e.currentTarget.style.borderColor = 'var(--primary)';
+                              }}
+                              onMouseLeave={(e) => {
+                                e.currentTarget.style.transform = 'none';
+                                e.currentTarget.style.borderColor = '#e2e8f0';
+                              }}
+                            />
+                          ))}
+                        </div>
+                      ) : (
+                        <div 
+                          style={{
+                            border: '1px dashed #cbd5e1',
+                            borderRadius: 'var(--radius-md)',
+                            padding: '20px',
+                            textAlign: 'center',
+                            color: '#64748b',
+                            fontSize: '0.85rem',
+                            background: '#f8fafc'
+                          }}
+                        >
+                          Sin fotos registradas.
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Footer Actions */}
+                    <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px', borderTop: '1px solid #e2e8f0', paddingTop: '16px', marginTop: '10px' }}>
+                      <button
+                        onClick={() => handleStartEditBranch(selectedBranchDetail)}
+                        style={{
+                          background: 'var(--primary)',
+                          color: 'white',
+                          border: 'none',
+                          padding: '8px 16px',
+                          borderRadius: 'var(--radius-md)',
+                          fontSize: '0.88rem',
+                          fontWeight: 600,
+                          cursor: 'pointer',
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: '6px',
+                          transition: 'opacity 0.2s'
+                        }}
+                        onMouseEnter={(e) => e.currentTarget.style.opacity = '0.9'}
+                        onMouseLeave={(e) => e.currentTarget.style.opacity = '1'}
+                      >
+                        <Edit2 size={14} /> Editar Sucursal
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* TAB: PAYMENT CONFIG */}
+          {activeTab === "payment-config" && (
+            <div style={{ display: "flex", flexDirection: "column", gap: "24px", maxWidth: "960px" }}>
+              {/* Header */}
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: "16px" }}>
+                <div>
+                  <h2 className={styles.sectionTitle} style={{ fontSize: "1.4rem", display: "flex", alignItems: "center", gap: "12px", marginBottom: "6px" }}>
+                    <CreditCard size={26} style={{ color: "var(--primary)" }} /> Pasarelas de Pago
+                  </h2>
+                  <p style={{ fontSize: "0.85rem", color: "var(--text-muted)", maxWidth: "600px" }}>
+                    Configura las claves API de tus pasarelas de pago. Cada empresa tiene sus propias credenciales independientes.
+                  </p>
+                </div>
+
+                {/* Mode Toggle */}
+                <div style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "12px",
+                  padding: "10px 20px",
+                  borderRadius: "var(--radius-lg)",
+                  border: "1px solid var(--border-color)",
+                  background: "rgba(255,255,255,0.7)",
+                  backdropFilter: "blur(8px)",
+                  boxShadow: "0 2px 8px rgba(0,0,0,0.04)"
+                }}>
+                  <span style={{ fontSize: "0.8rem", fontWeight: 600, color: paymentMode === "test" ? "#f59e0b" : "var(--text-muted)" }}>
+                    🧪 Pruebas
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setPaymentMode(paymentMode === "test" ? "production" : "test")}
+                    style={{
+                      position: "relative",
+                      width: "52px",
+                      height: "28px",
+                      borderRadius: "14px",
+                      border: "none",
+                      cursor: "pointer",
+                      background: paymentMode === "production" 
+                        ? "linear-gradient(135deg, #059669, #10b981)" 
+                        : "linear-gradient(135deg, #f59e0b, #fbbf24)",
+                      transition: "background 0.3s ease",
+                      boxShadow: "inset 0 1px 3px rgba(0,0,0,0.15)"
+                    }}
+                  >
+                    <div style={{
+                      position: "absolute",
+                      top: "3px",
+                      left: paymentMode === "production" ? "26px" : "3px",
+                      width: "22px",
+                      height: "22px",
+                      borderRadius: "50%",
+                      background: "white",
+                      transition: "left 0.3s ease",
+                      boxShadow: "0 1px 4px rgba(0,0,0,0.2)"
+                    }} />
+                  </button>
+                  <span style={{ fontSize: "0.8rem", fontWeight: 600, color: paymentMode === "production" ? "#059669" : "var(--text-muted)" }}>
+                    🚀 Producción
+                  </span>
+                </div>
+              </div>
+
+              {/* Messages */}
+              {payError && (
+                <div style={{ color: "var(--danger)", fontSize: "0.85rem", padding: "12px 16px", background: "var(--danger-glow)", borderRadius: "var(--radius-md)", borderLeft: "4px solid var(--danger)", display: "flex", alignItems: "center", gap: "8px" }}>
+                  <AlertCircle size={16} /> {payError}
+                </div>
+              )}
+              {payMessage && (
+                <div style={{ color: "var(--success)", fontSize: "0.85rem", padding: "12px 16px", background: "var(--success-glow)", borderRadius: "var(--radius-md)", borderLeft: "4px solid var(--success)", fontWeight: 500, display: "flex", alignItems: "center", gap: "8px" }}>
+                  <CheckCircle2 size={16} /> {payMessage}
+                </div>
+              )}
+
+              {/* Mode Indicator Banner */}
+              <div style={{
+                padding: "12px 20px",
+                borderRadius: "var(--radius-md)",
+                background: paymentMode === "production" 
+                  ? "linear-gradient(135deg, rgba(5, 150, 105, 0.08), rgba(16, 185, 129, 0.05))"
+                  : "linear-gradient(135deg, rgba(245, 158, 11, 0.08), rgba(251, 191, 36, 0.05))",
+                border: `1px solid ${paymentMode === "production" ? "rgba(5, 150, 105, 0.2)" : "rgba(245, 158, 11, 0.2)"}`,
+                display: "flex",
+                alignItems: "center",
+                gap: "10px",
+                fontSize: "0.82rem",
+                color: paymentMode === "production" ? "#059669" : "#d97706",
+                fontWeight: 500
+              }}>
+                {paymentMode === "production" ? <ToggleRight size={18} /> : <ToggleLeft size={18} />}
+                {paymentMode === "production" 
+                  ? "Modo Producción activo — Las transacciones serán reales y se procesarán cargos." 
+                  : "Modo Pruebas activo — Las transacciones son simuladas, no se realizarán cargos reales."}
+              </div>
+
+              {/* Mercado Pago Card */}
+              <div className="glass-panel" style={{
+                padding: "28px",
+                borderRadius: "var(--radius-lg)",
+                position: "relative",
+                overflow: "hidden",
+                border: "1px solid var(--border-color)"
+              }}>
+                {/* Decorative gradient bar */}
+                <div style={{
+                  position: "absolute",
+                  top: 0,
+                  left: 0,
+                  right: 0,
+                  height: "4px",
+                  background: "linear-gradient(90deg, #009ee3, #00b1ea, #009ee3)",
+                  borderRadius: "var(--radius-lg) var(--radius-lg) 0 0"
+                }} />
+
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "24px" }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: "14px" }}>
+                    <div style={{
+                      width: "48px",
+                      height: "48px",
+                      borderRadius: "12px",
+                      background: "linear-gradient(135deg, #009ee3, #00b1ea)",
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      boxShadow: "0 4px 12px rgba(0, 158, 227, 0.25)"
+                    }}>
+                      <CreditCard size={24} color="white" />
+                    </div>
+                    <div>
+                      <h3 style={{ fontSize: "1.15rem", fontWeight: 700, color: "var(--text-primary)", margin: 0 }}>Mercado Pago</h3>
+                      <p style={{ fontSize: "0.75rem", color: "var(--text-muted)", margin: "2px 0 0 0" }}>Pagos online y presenciales en México</p>
+                    </div>
+                  </div>
+
+                  {/* Status chip */}
+                  <div style={{
+                    padding: "5px 14px",
+                    borderRadius: "20px",
+                    fontSize: "0.72rem",
+                    fontWeight: 600,
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "6px",
+                    background: (payMpPublicKeyTest || payMpPublicKeyProd) ? "var(--success-glow)" : "rgba(0,0,0,0.04)",
+                    color: (payMpPublicKeyTest || payMpPublicKeyProd) ? "var(--success)" : "var(--text-muted)",
+                    border: `1px solid ${(payMpPublicKeyTest || payMpPublicKeyProd) ? "rgba(16,185,129,0.2)" : "var(--border-color)"}`
+                  }}>
+                    {(payMpPublicKeyTest || payMpPublicKeyProd) ? <><CheckCircle2 size={13} /> Configurado</> : <><AlertCircle size={13} /> Sin configurar</>}
+                  </div>
+                </div>
+
+                {/* Test Keys Section */}
+                <div style={{ marginBottom: "20px" }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "14px" }}>
+                    <div style={{ width: "8px", height: "8px", borderRadius: "50%", background: "#f59e0b" }} />
+                    <span style={{ fontSize: "0.8rem", fontWeight: 600, color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.5px" }}>Claves de Prueba (Sandbox)</span>
+                  </div>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "14px" }}>
+                    <div className={styles.formGroup}>
+                      <label className={styles.inputLabel} style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+                        <Lock size={12} /> Public Key (Test)
+                      </label>
+                      <div style={{ position: "relative" }}>
+                        <input
+                          type={payShowMpPublicKeyTest ? "text" : "password"}
+                          placeholder="TEST-xxxxxxxx-xxxx-xxxx-xxxx"
+                          value={payMpPublicKeyTest}
+                          onChange={(e) => setPayMpPublicKeyTest(e.target.value)}
+                          className={styles.formInput}
+                          style={{ paddingRight: "40px", width: "100%", boxSizing: "border-box", fontFamily: "monospace", fontSize: "0.8rem" }}
+                          disabled={payIsLoading}
+                        />
+                        <button
+                          type="button"
+                          onClick={() => setPayShowMpPublicKeyTest(!payShowMpPublicKeyTest)}
+                          style={{ position: "absolute", right: "8px", top: "50%", transform: "translateY(-50%)", background: "none", border: "none", cursor: "pointer", color: "var(--text-muted)", padding: "4px" }}
+                        >
+                          {payShowMpPublicKeyTest ? <EyeOff size={16} /> : <Eye size={16} />}
+                        </button>
+                      </div>
+                    </div>
+                    <div className={styles.formGroup}>
+                      <label className={styles.inputLabel} style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+                        <Lock size={12} /> Access Token (Test)
+                      </label>
+                      <div style={{ position: "relative" }}>
+                        <input
+                          type={payShowMpAccessTokenTest ? "text" : "password"}
+                          placeholder="TEST-xxxxxxxx-xxxx-xxxx-xxxx"
+                          value={payMpAccessTokenTest}
+                          onChange={(e) => setPayMpAccessTokenTest(e.target.value)}
+                          className={styles.formInput}
+                          style={{ paddingRight: "40px", width: "100%", boxSizing: "border-box", fontFamily: "monospace", fontSize: "0.8rem" }}
+                          disabled={payIsLoading}
+                        />
+                        <button
+                          type="button"
+                          onClick={() => setPayShowMpAccessTokenTest(!payShowMpAccessTokenTest)}
+                          style={{ position: "absolute", right: "8px", top: "50%", transform: "translateY(-50%)", background: "none", border: "none", cursor: "pointer", color: "var(--text-muted)", padding: "4px" }}
+                        >
+                          {payShowMpAccessTokenTest ? <EyeOff size={16} /> : <Eye size={16} />}
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Production Keys Section */}
+                <div>
+                  <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "14px" }}>
+                    <div style={{ width: "8px", height: "8px", borderRadius: "50%", background: "#059669" }} />
+                    <span style={{ fontSize: "0.8rem", fontWeight: 600, color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.5px" }}>Claves de Producción</span>
+                  </div>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "14px" }}>
+                    <div className={styles.formGroup}>
+                      <label className={styles.inputLabel} style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+                        <Lock size={12} /> Public Key (Producción)
+                      </label>
+                      <div style={{ position: "relative" }}>
+                        <input
+                          type={payShowMpPublicKeyProd ? "text" : "password"}
+                          placeholder="APP_USR-xxxxxxxx-xxxx-xxxx"
+                          value={payMpPublicKeyProd}
+                          onChange={(e) => setPayMpPublicKeyProd(e.target.value)}
+                          className={styles.formInput}
+                          style={{ paddingRight: "40px", width: "100%", boxSizing: "border-box", fontFamily: "monospace", fontSize: "0.8rem" }}
+                          disabled={payIsLoading}
+                        />
+                        <button
+                          type="button"
+                          onClick={() => setPayShowMpPublicKeyProd(!payShowMpPublicKeyProd)}
+                          style={{ position: "absolute", right: "8px", top: "50%", transform: "translateY(-50%)", background: "none", border: "none", cursor: "pointer", color: "var(--text-muted)", padding: "4px" }}
+                        >
+                          {payShowMpPublicKeyProd ? <EyeOff size={16} /> : <Eye size={16} />}
+                        </button>
+                      </div>
+                    </div>
+                    <div className={styles.formGroup}>
+                      <label className={styles.inputLabel} style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+                        <Lock size={12} /> Access Token (Producción)
+                      </label>
+                      <div style={{ position: "relative" }}>
+                        <input
+                          type={payShowMpAccessTokenProd ? "text" : "password"}
+                          placeholder="APP_USR-xxxxxxxx-xxxx-xxxx"
+                          value={payMpAccessTokenProd}
+                          onChange={(e) => setPayMpAccessTokenProd(e.target.value)}
+                          className={styles.formInput}
+                          style={{ paddingRight: "40px", width: "100%", boxSizing: "border-box", fontFamily: "monospace", fontSize: "0.8rem" }}
+                          disabled={payIsLoading}
+                        />
+                        <button
+                          type="button"
+                          onClick={() => setPayShowMpAccessTokenProd(!payShowMpAccessTokenProd)}
+                          style={{ position: "absolute", right: "8px", top: "50%", transform: "translateY(-50%)", background: "none", border: "none", cursor: "pointer", color: "var(--text-muted)", padding: "4px" }}
+                        >
+                          {payShowMpAccessTokenProd ? <EyeOff size={16} /> : <Eye size={16} />}
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Mercado Pago Help Link */}
+                <div style={{ marginTop: "16px", paddingTop: "14px", borderTop: "1px solid var(--border-color)", display: "flex", alignItems: "center", gap: "8px" }}>
+                  <ExternalLink size={13} style={{ color: "var(--text-muted)" }} />
+                  <a href="https://www.mercadopago.com.mx/developers/panel/app" target="_blank" rel="noopener noreferrer" style={{ fontSize: "0.78rem", color: "#009ee3", textDecoration: "none", fontWeight: 500 }}>
+                    Obtener mis credenciales de Mercado Pago →
+                  </a>
+                </div>
+              </div>
+
+              {/* Clip Card */}
+              <div className="glass-panel" style={{
+                padding: "28px",
+                borderRadius: "var(--radius-lg)",
+                position: "relative",
+                overflow: "hidden",
+                border: "1px solid var(--border-color)"
+              }}>
+                {/* Decorative gradient bar */}
+                <div style={{
+                  position: "absolute",
+                  top: 0,
+                  left: 0,
+                  right: 0,
+                  height: "4px",
+                  background: "linear-gradient(90deg, #FF6B35, #ff8f62, #FF6B35)",
+                  borderRadius: "var(--radius-lg) var(--radius-lg) 0 0"
+                }} />
+
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "24px" }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: "14px" }}>
+                    <div style={{
+                      width: "48px",
+                      height: "48px",
+                      borderRadius: "12px",
+                      background: "linear-gradient(135deg, #FF6B35, #ff8f62)",
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      boxShadow: "0 4px 12px rgba(255, 107, 53, 0.25)"
+                    }}>
+                      <CreditCard size={24} color="white" />
+                    </div>
+                    <div>
+                      <h3 style={{ fontSize: "1.15rem", fontWeight: 700, color: "var(--text-primary)", margin: 0 }}>Clip</h3>
+                      <p style={{ fontSize: "0.75rem", color: "var(--text-muted)", margin: "2px 0 0 0" }}>Terminal de pago y cobros digitales</p>
+                    </div>
+                  </div>
+
+                  {/* Status chip */}
+                  <div style={{
+                    padding: "5px 14px",
+                    borderRadius: "20px",
+                    fontSize: "0.72rem",
+                    fontWeight: 600,
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "6px",
+                    background: (payClipApiKeyTest || payClipApiKeyProd) ? "var(--success-glow)" : "rgba(0,0,0,0.04)",
+                    color: (payClipApiKeyTest || payClipApiKeyProd) ? "var(--success)" : "var(--text-muted)",
+                    border: `1px solid ${(payClipApiKeyTest || payClipApiKeyProd) ? "rgba(16,185,129,0.2)" : "var(--border-color)"}`
+                  }}>
+                    {(payClipApiKeyTest || payClipApiKeyProd) ? <><CheckCircle2 size={13} /> Configurado</> : <><AlertCircle size={13} /> Sin configurar</>}
+                  </div>
+                </div>
+
+                {/* Test Key */}
+                <div style={{ marginBottom: "20px" }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "14px" }}>
+                    <div style={{ width: "8px", height: "8px", borderRadius: "50%", background: "#f59e0b" }} />
+                    <span style={{ fontSize: "0.8rem", fontWeight: 600, color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.5px" }}>Clave de Prueba (Sandbox)</span>
+                  </div>
+                  <div className={styles.formGroup}>
+                    <label className={styles.inputLabel} style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+                      <Lock size={12} /> API Key (Test)
+                    </label>
+                    <div style={{ position: "relative", maxWidth: "480px" }}>
+                      <input
+                        type={payShowClipApiKeyTest ? "text" : "password"}
+                        placeholder="Basic xxxxxxxxxxxxxxx"
+                        value={payClipApiKeyTest}
+                        onChange={(e) => setPayClipApiKeyTest(e.target.value)}
+                        className={styles.formInput}
+                        style={{ paddingRight: "40px", width: "100%", boxSizing: "border-box", fontFamily: "monospace", fontSize: "0.8rem" }}
+                        disabled={payIsLoading}
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setPayShowClipApiKeyTest(!payShowClipApiKeyTest)}
+                        style={{ position: "absolute", right: "8px", top: "50%", transform: "translateY(-50%)", background: "none", border: "none", cursor: "pointer", color: "var(--text-muted)", padding: "4px" }}
+                      >
+                        {payShowClipApiKeyTest ? <EyeOff size={16} /> : <Eye size={16} />}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Production Key */}
+                <div>
+                  <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "14px" }}>
+                    <div style={{ width: "8px", height: "8px", borderRadius: "50%", background: "#059669" }} />
+                    <span style={{ fontSize: "0.8rem", fontWeight: 600, color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.5px" }}>Clave de Producción</span>
+                  </div>
+                  <div className={styles.formGroup}>
+                    <label className={styles.inputLabel} style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+                      <Lock size={12} /> API Key (Producción)
+                    </label>
+                    <div style={{ position: "relative", maxWidth: "480px" }}>
+                      <input
+                        type={payShowClipApiKeyProd ? "text" : "password"}
+                        placeholder="Basic xxxxxxxxxxxxxxx"
+                        value={payClipApiKeyProd}
+                        onChange={(e) => setPayClipApiKeyProd(e.target.value)}
+                        className={styles.formInput}
+                        style={{ paddingRight: "40px", width: "100%", boxSizing: "border-box", fontFamily: "monospace", fontSize: "0.8rem" }}
+                        disabled={payIsLoading}
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setPayShowClipApiKeyProd(!payShowClipApiKeyProd)}
+                        style={{ position: "absolute", right: "8px", top: "50%", transform: "translateY(-50%)", background: "none", border: "none", cursor: "pointer", color: "var(--text-muted)", padding: "4px" }}
+                      >
+                        {payShowClipApiKeyProd ? <EyeOff size={16} /> : <Eye size={16} />}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Clip Help Link */}
+                <div style={{ marginTop: "16px", paddingTop: "14px", borderTop: "1px solid var(--border-color)", display: "flex", alignItems: "center", gap: "8px" }}>
+                  <ExternalLink size={13} style={{ color: "var(--text-muted)" }} />
+                  <a href="https://developer.clip.mx/" target="_blank" rel="noopener noreferrer" style={{ fontSize: "0.78rem", color: "#FF6B35", textDecoration: "none", fontWeight: 500 }}>
+                    Documentación de API de Clip →
+                  </a>
+                </div>
+              </div>
+
+              {/* Save Button */}
+              <div style={{ display: "flex", justifyContent: "flex-end", gap: "12px" }}>
+                <button
+                  type="button"
+                  onClick={handleSavePaymentConfig}
+                  disabled={payIsLoading}
+                  className={styles.formBtn}
+                  style={{
+                    padding: "12px 32px",
+                    fontSize: "0.95rem",
+                    borderRadius: "var(--radius-md)",
+                    background: payIsLoading ? "var(--text-muted)" : "linear-gradient(135deg, var(--primary), #e12702)",
+                    opacity: payIsLoading ? 0.7 : 1,
+                    cursor: payIsLoading ? "not-allowed" : "pointer",
+                    boxShadow: "0 4px 16px rgba(247, 52, 12, 0.2)",
+                    transition: "all 0.3s ease",
+                    minWidth: "200px"
+                  }}
+                >
+                  {payIsLoading ? (
+                    <>
+                      <div style={{
+                        width: "16px",
+                        height: "16px",
+                        border: "2px solid rgba(255,255,255,0.3)",
+                        borderTopColor: "white",
+                        borderRadius: "50%",
+                        animation: "spin 1s linear infinite"
+                      }} />
+                      Guardando...
+                    </>
+                  ) : (
+                    <>
+                      <CheckCircle2 size={18} />
+                      Guardar Configuración
+                    </>
+                  )}
+                </button>
+              </div>
+
+              {/* Info Note */}
+              <div style={{
+                padding: "16px 20px",
+                borderRadius: "var(--radius-md)",
+                background: "rgba(99, 102, 241, 0.04)",
+                border: "1px solid rgba(99, 102, 241, 0.12)",
+                fontSize: "0.8rem",
+                color: "var(--text-secondary)",
+                lineHeight: "1.5"
+              }}>
+                <strong style={{ color: "var(--text-primary)" }}>💡 Nota de seguridad:</strong> Tus claves API se almacenan de forma segura en la base de datos y solo son accesibles por los administradores de tu empresa. 
+                Nunca compartas tus Access Tokens o claves de producción con terceros.
+              </div>
+            </div>
+          )}
+
+          {selectedPreviewPhoto && (
+            <div 
+              style={{
+                position: 'fixed',
+                top: 0,
+                left: 0,
+                right: 0,
+                bottom: 0,
+                background: 'rgba(0,0,0,0.85)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                zIndex: 10000,
+                cursor: 'zoom-out'
+              }}
+              onClick={() => setSelectedPreviewPhoto(null)}
+            >
+              <img 
+                src={selectedPreviewPhoto} 
+                alt="Preview zoom" 
+                style={{
+                  maxWidth: '90%',
+                  maxHeight: '90%',
+                  objectFit: 'contain',
+                  borderRadius: '8px',
+                  border: '2px solid rgba(255,255,255,0.25)',
+                  boxShadow: '0 20px 50px rgba(0,0,0,0.5)'
+                }}
+              />
+            </div>
+          )}
+          {editingStaff && (
+            <div 
+              style={{
+                position: 'fixed',
+                top: 0,
+                left: 0,
+                right: 0,
+                bottom: 0,
+                background: 'rgba(15, 23, 42, 0.65)',
+                backdropFilter: 'blur(8px)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                zIndex: 9999,
+              }}
+            >
+              <div 
+                className="glass-panel"
+                style={{
+                  width: '100%',
+                  maxWidth: '550px',
+                  maxHeight: '90vh',
+                  overflowY: 'auto',
+                  borderRadius: 'var(--radius-lg)',
+                  padding: '24px',
+                  background: 'var(--bg-card)',
+                  border: '1px solid var(--border-color)',
+                  boxShadow: '0 20px 25px -5px rgb(0 0 0 / 0.3), 0 8px 10px -6px rgb(0 0 0 / 0.3)',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: '16px'
+                }}
+              >
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid var(--border-color)', paddingBottom: '12px' }}>
+                  <h3 style={{ margin: 0, fontSize: '1.2rem', fontWeight: 600, color: 'var(--text-primary)' }}>
+                    Editar Usuario / Personal
+                  </h3>
+                  <button 
+                    onClick={() => setEditingStaff(null)}
+                    style={{ fontSize: '1.2rem', color: 'var(--text-muted)', background: 'none', border: 'none', cursor: 'pointer' }}
+                  >
+                    ✕
+                  </button>
+                </div>
+
+                <form 
+                  onSubmit={(e) => {
+                    e.preventDefault();
+                    handleSaveStaffEdit();
+                  }}
+                  style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}
+                >
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+                    <div className={styles.formGroup}>
+                      <label className={styles.inputLabel} style={{ fontSize: '0.75rem' }}>ID Empleado</label>
+                      <input 
+                        type="text" 
+                        value={editingStaff.id} 
+                        disabled 
+                        className={styles.formInput}
+                        style={{ opacity: 0.6, cursor: 'not-allowed', background: 'rgba(255,255,255,0.02)' }}
+                      />
+                    </div>
+                    <div className={styles.formGroup}>
+                      <label className={styles.inputLabel} style={{ fontSize: '0.75rem' }}>ID Empresa</label>
+                      <input 
+                        type="text" 
+                        value={currentCompanyId} 
+                        disabled 
+                        className={styles.formInput}
+                        style={{ opacity: 0.6, cursor: 'not-allowed', background: 'rgba(255,255,255,0.02)' }}
+                      />
+                    </div>
+                  </div>
+
+                  <div className={styles.formGroup}>
+                    <label className={styles.inputLabel}>Nombre Completo *</label>
+                    <input 
+                      type="text" 
+                      value={editStaffName} 
+                      onChange={(e) => setEditStaffName(e.target.value)}
+                      required
+                      className={styles.formInput}
+                    />
+                  </div>
+
+                  <div className={styles.formGroup}>
+                    <label className={styles.inputLabel}>Correo Electrónico *</label>
+                    <input 
+                      type="email" 
+                      value={editStaffEmail} 
+                      onChange={(e) => setEditStaffEmail(e.target.value)}
+                      required
+                      className={styles.formInput}
+                    />
+                  </div>
+
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+                    <div className={styles.formGroup}>
+                      <label className={styles.inputLabel}>Teléfono</label>
+                      <input 
+                        type="text" 
+                        value={editStaffPhone} 
+                        onChange={(e) => setEditStaffPhone(e.target.value)}
+                        className={styles.formInput}
+                      />
+                    </div>
+                    <div className={styles.formGroup}>
+                      <label className={styles.inputLabel}>Turno</label>
+                      <select 
+                        value={editStaffShift} 
+                        onChange={(e) => setEditStaffShift(e.target.value as any)}
+                        className={styles.formInput}
+                        style={{ color: 'var(--text-primary)' }}
+                      >
+                        <option value="Matutino">Matutino</option>
+                        <option value="Vespertino">Vespertino</option>
+                        <option value="Nocturno">Nocturno</option>
+                      </select>
+                    </div>
+                  </div>
+
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+                    <div className={styles.formGroup}>
+                      <label className={styles.inputLabel}>Rol Asignado</label>
+                      <select 
+                        value={editStaffRole} 
+                        onChange={(e) => setEditStaffRole(e.target.value)}
+                        className={styles.formInput}
+                        style={{ color: 'var(--text-primary)' }}
+                      >
+                        <option value="Dispatcher">Despachador</option>
+                        <option value="Soporte">Soporte</option>
+                        <option value="Administrador">Administrador</option>
+                        <option value="Mesero">Mesero</option>
+                        <option value="Repartidor">Repartidor</option>
+                      </select>
+                    </div>
+                    <div className={styles.formGroup}>
+                      <label className={styles.inputLabel}>Estado</label>
+                      <select 
+                        value={editStaffStatus} 
+                        onChange={(e) => setEditStaffStatus(e.target.value as any)}
+                        className={styles.formInput}
+                        style={{ color: 'var(--text-primary)' }}
+                      >
+                        <option value="active">Activo</option>
+                        <option value="inactive">Inactivo</option>
+                      </select>
+                    </div>
+                  </div>
+
+                  <div className={styles.formGroup}>
+                    <label className={styles.inputLabel}>Sucursales Vinculadas</label>
+                    {branches.length > 0 ? (
+                      <div style={{
+                        display: 'flex',
+                        flexDirection: 'column',
+                        gap: '6px',
+                        maxHeight: '100px',
+                        overflowY: 'auto',
+                        padding: '8px 12px',
+                        background: 'rgba(255,255,255,0.02)',
+                        borderRadius: 'var(--radius-md)',
+                        border: '1px solid rgba(255,255,255,0.06)'
+                      }}>
+                        {branches.map(b => (
+                          <label key={b.id} style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
+                            <input
+                              type="checkbox"
+                              checked={editStaffBranches.includes(b.id)}
+                              onChange={(e) => {
+                                if (e.target.checked) {
+                                  setEditStaffBranches(prev => [...prev, b.id]);
+                                } else {
+                                  setEditStaffBranches(prev => prev.filter(id => id !== b.id));
+                                }
+                              }}
+                            />
+                            {b.name}
+                          </label>
+                        ))}
+                      </div>
+                    ) : (
+                      <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+                        No hay sucursales disponibles.
+                      </span>
+                    )}
+                  </div>
+
+                  {editStaffRole === "Repartidor" && (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', padding: '12px', background: 'rgba(255,255,255,0.01)', borderRadius: 'var(--radius-md)', border: '1px dashed var(--border-color)', marginTop: '4px' }}>
+                      <h4 style={{ margin: 0, fontSize: '0.85rem', color: 'var(--text-primary)', fontWeight: 600 }}>Vehículo de Reparto</h4>
+                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+                        <div className={styles.formGroup}>
+                          <label className={styles.inputLabel} style={{ fontSize: "0.68rem" }}>Tipo</label>
+                          <select
+                            value={editStaffVehicle || "Motocicleta"}
+                            onChange={(e) => setEditStaffVehicle(e.target.value as any)}
+                            className={styles.formInput}
+                            style={{ color: "var(--text-primary)", padding: "8px" }}
+                          >
+                            <option value="Motocicleta">Motocicleta</option>
+                            <option value="Bicicleta">Bicicleta</option>
+                            <option value="Automóvil">Automóvil</option>
+                            <option value="Van">Van</option>
+                          </select>
+                        </div>
+                        <div className={styles.formGroup}>
+                          <label className={styles.inputLabel} style={{ fontSize: "0.68rem" }}>Modelo</label>
+                          <input
+                            type="text"
+                            value={editStaffVehicleModel}
+                            onChange={(e) => setEditStaffVehicleModel(e.target.value)}
+                            className={styles.formInput}
+                            style={{ padding: "8px" }}
+                            placeholder="Modelo de vehículo"
+                          />
+                        </div>
+                      </div>
+                      <div className={styles.formGroup}>
+                        <label className={styles.inputLabel} style={{ fontSize: "0.68rem" }}>Placas</label>
+                        <input
+                          type="text"
+                          value={editStaffVehiclePlates}
+                          onChange={(e) => setEditStaffVehiclePlates(e.target.value)}
+                          className={styles.formInput}
+                          style={{ padding: "8px" }}
+                          placeholder="Placas"
+                        />
+                      </div>
+                    </div>
+                  )}
+
+                  <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end', marginTop: '12px', borderTop: '1px solid var(--border-color)', paddingTop: '12px' }}>
+                    <button 
+                      type="button" 
+                      onClick={() => setEditingStaff(null)}
+                      className={styles.formBtn}
+                      style={{ background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)', color: 'var(--text-secondary)' }}
+                    >
+                      Cancelar
+                    </button>
+                    <button 
+                      type="submit" 
+                      className={styles.formBtn}
+                      style={{ background: 'var(--primary)', color: '#fff' }}
+                    >
+                      Guardar Cambios
+                    </button>
+                  </div>
+                </form>
+              </div>
+            </div>
+          )}
+        </main>
+      </div>
+    </div>
+  );
+}

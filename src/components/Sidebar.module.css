@@ -1,0 +1,216 @@
+.sidebar {
+  display: flex;
+  flex-direction: column;
+  width: var(--sidebar-width);
+  height: 100vh;
+  background: var(--bg-secondary);
+  border-right: 1px solid var(--border-color);
+  transition: width var(--transition-normal);
+  flex-shrink: 0;
+  z-index: 100;
+}
+
+.collapsed {
+  width: var(--sidebar-collapsed-width);
+}
+
+.brand {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 24px 16px 20px 16px;
+  border-bottom: 1px solid var(--border-color);
+  overflow: hidden;
+  transition: all var(--transition-normal);
+}
+
+.collapsed .brand {
+  padding: 20px 8px;
+  gap: 0;
+}
+
+.logo {
+  color: var(--primary);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--primary-glow);
+  padding: 10px;
+  border-radius: var(--radius-md);
+  box-shadow: 0 0 15px var(--primary-glow);
+  transition: all var(--transition-normal);
+}
+
+.companyLogoImg {
+  width: 52px;
+  height: 52px;
+  border-radius: var(--radius-md);
+  object-fit: cover;
+  border: 2px solid var(--primary-glow);
+  box-shadow: 0 4px 12px rgba(247, 52, 12, 0.15);
+  transition: all var(--transition-normal);
+}
+
+.collapsed .companyLogoImg {
+  width: 36px;
+  height: 36px;
+}
+
+.collapsed .logo {
+  padding: 8px;
+}
+
+.brandName {
+  font-weight: 700;
+  font-size: 1.15rem;
+  letter-spacing: -0.5px;
+  color: var(--text-primary);
+  text-align: center;
+  white-space: normal;
+  word-break: break-word;
+  line-height: 1.2;
+  transition: all var(--transition-normal);
+  opacity: 1;
+  max-height: 60px;
+}
+
+.collapsed .brandName {
+  opacity: 0;
+  max-height: 0;
+  margin-top: 0;
+  padding: 0;
+  pointer-events: none;
+  overflow: hidden;
+}
+
+.nav {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 20px 12px;
+  flex-grow: 1;
+}
+
+.navLink {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 12px 16px;
+  border-radius: var(--radius-md);
+  color: var(--text-secondary);
+  font-weight: 500;
+  transition: all var(--transition-fast);
+  cursor: pointer;
+  position: relative;
+  overflow: hidden;
+}
+
+.navLink:hover {
+  color: var(--text-primary);
+  background: rgba(0, 0, 0, 0.03);
+}
+
+.activeLink {
+  color: var(--primary);
+  background: var(--primary-glow);
+}
+
+.activeLink:hover {
+  background: rgba(247, 52, 12, 0.12);
+  color: var(--primary);
+}
+
+.activeIndicator {
+  position: absolute;
+  left: 0;
+  top: 25%;
+  height: 50%;
+  width: 4px;
+  background: var(--primary);
+  border-radius: 0 4px 4px 0;
+  box-shadow: 0 0 10px var(--primary);
+}
+
+.linkLabel {
+  font-size: 0.95rem;
+  transition: opacity var(--transition-fast);
+}
+
+.collapsed .linkLabel {
+  opacity: 0;
+  width: 0;
+  pointer-events: none;
+}
+
+.collapsed .navLink {
+  justify-content: center;
+  padding: 12px 0;
+}
+
+.footer {
+  padding: 20px;
+  border-top: 1px solid var(--border-color);
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.footerInfo {
+  display: flex;
+  flex-direction: column;
+  transition: opacity var(--transition-fast);
+}
+
+.collapsed .footerInfo {
+  opacity: 0;
+  width: 0;
+  pointer-events: none;
+}
+
+.userName {
+  font-weight: 600;
+  font-size: 0.9rem;
+  color: var(--text-primary);
+}
+
+.userRole {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+
+.avatar {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, var(--primary), var(--secondary));
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: bold;
+  color: white;
+  font-size: 0.9rem;
+  flex-shrink: 0;
+  box-shadow: 0 0 10px var(--primary-glow);
+}
+
+.toggleBtn {
+  margin: 10px 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 8px;
+  border-radius: var(--radius-sm);
+  color: var(--text-muted);
+  border: 1px solid var(--border-color);
+  background: rgba(255, 255, 255, 0.02);
+  transition: all var(--transition-fast);
+}
+
+.toggleBtn:hover {
+  color: var(--text-primary);
+  background: rgba(0, 0, 0, 0.03);
+}

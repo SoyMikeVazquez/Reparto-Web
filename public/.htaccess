@@ -1,0 +1,28 @@
+# Redirect 403 and 404 errors to the main site URL
+ErrorDocument 403 https://dashboard.reparto.mx/
+ErrorDocument 404 https://dashboard.reparto.mx/
+
+# Disable directory indexing to prevent 403 Forbidden errors
+Options -Indexes
+
+# Enable Rewrite Engine
+RewriteEngine On
+
+# Redirect HTTP to HTTPS
+RewriteCond %{HTTPS} off
+RewriteRule ^(.*)$ https://%{HTTP_HOST}%{REQUEST_URI} [L,R=301]
+
+# If the request matches a physical file, or a directory that contains index.html, serve it directly
+RewriteCond %{REQUEST_FILENAME} -f [OR]
+RewriteCond %{REQUEST_FILENAME}/index.html -f
+RewriteRule ^ - [L]
+
+# Clean URLs: Map requests without extension to .html files
+# e.g., dashboard.reparto.mx/dashboard -> serve dashboard.html
+RewriteCond %{DOCUMENT_ROOT}/$1.html -f
+RewriteRule ^([^.]+)/?$ $1.html [L]
+
+# Fallback: Send all other non-existent routes to index.html for React/Next.js client-side routing
+RewriteCond %{REQUEST_FILENAME} !-f
+RewriteCond %{REQUEST_FILENAME}/index.html !-f
+RewriteRule ^ /index.html [L]
