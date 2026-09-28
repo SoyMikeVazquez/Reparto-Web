@@ -696,7 +696,7 @@ export const DashboardProvider: React.FC<{ children: React.ReactNode }> = ({ chi
         setSettings((prev) => ({ ...prev, mapboxToken: savedToken }));
       }, 0);
     } else {
-      const defaultToken = process.env.NEXT_PUBLIC_MAPBOX_ACCESS_TOKEN || "";
+      const defaultToken: string = process.env.NEXT_PUBLIC_MAPBOX_ACCESS_TOKEN || "";
       localStorage.setItem("reparto_mapbox_token", defaultToken);
       setTimeout(() => {
         setSettings((prev) => ({ ...prev, mapboxToken: defaultToken }));
