@@ -38,7 +38,15 @@ import {
   ToggleRight,
   ExternalLink,
   CheckCircle2,
-  AlertCircle
+  AlertCircle,
+  Globe,
+  Save,
+  Camera,
+  Palette,
+  Check,
+  ArrowUp,
+  ArrowDown,
+  Percent
 } from "lucide-react";
 import { OrderRouteMap } from "../../components/OrderRouteMap";
 
@@ -493,6 +501,46 @@ export default function Dashboard() {
   const [brokerError, setBrokerError] = useState("");
   const [brokerMessage, setBrokerMessage] = useState("");
   const [brokersList, setBrokersList] = useState<any[]>([]);
+  const [editingBroker, setEditingBroker] = useState<any | null>(null);
+  const [editBrokerStatus, setEditBrokerStatus] = useState<string>("active");
+
+  // Repartidores (Direct Supabase CRUD on table 'repartidores')
+  const [isRepartidorModalOpen, setIsRepartidorModalOpen] = useState(false);
+  const [editingRepartidor, setEditingRepartidor] = useState<any | null>(null);
+  const [repName, setRepName] = useState("");
+  const [repEmail, setRepEmail] = useState("");
+  const [repPhone, setRepPhone] = useState("");
+  const [repBrokerId, setRepBrokerId] = useState("");
+  const [repDriverPhotos, setRepDriverPhotos] = useState<string[]>([]);
+  const [repVehiclePhotos, setRepVehiclePhotos] = useState<string[]>([]);
+  const [repDriverPhotoFiles, setRepDriverPhotoFiles] = useState<File[]>([]);
+  const [repVehiclePhotoFiles, setRepVehiclePhotoFiles] = useState<File[]>([]);
+  const [repDriverPhotoPreviews, setRepDriverPhotoPreviews] = useState<string[]>([]);
+  const [repVehiclePhotoPreviews, setRepVehiclePhotoPreviews] = useState<string[]>([]);
+  const [repIsLoading, setRepIsLoading] = useState(false);
+  const [repError, setRepError] = useState("");
+  const [repSuccess, setRepSuccess] = useState("");
+  const [viewingRepartidorGallery, setViewingRepartidorGallery] = useState<any | null>(null);
+
+  // Sucursales & Tarifas (Broker Management on 'Sucursales' table)
+  const [brokerSucursalesList, setBrokerSucursalesList] = useState<any[]>([]);
+  const [editingSucursal, setEditingSucursal] = useState<any | null>(null);
+  const [sucursalModalOpen, setSucursalModalOpen] = useState(false);
+  const [sucursalFormDireccion, setSucursalFormDireccion] = useState("");
+  const [sucursalFormLatitud, setSucursalFormLatitud] = useState<string>("");
+  const [sucursalFormLongitud, setSucursalFormLongitud] = useState<string>("");
+  const [sucursalFormLinkGoogleMaps, setSucursalFormLinkGoogleMaps] = useState("");
+  const [sucursalFormFotos, setSucursalFormFotos] = useState<string[]>([]);
+  const [sucursalFormPhotoFiles, setSucursalFormPhotoFiles] = useState<File[]>([]);
+  const [sucursalFormPhotoPreviews, setSucursalFormPhotoPreviews] = useState<string[]>([]);
+  const [sucursalFormTarifas, setSucursalFormTarifas] = useState<{ min_km: number; max_km: number; precio: number }[]>([]);
+  const [sucursalKmExtraEnabled, setSucursalKmExtraEnabled] = useState(false);
+  const [sucursalKmExtraPrecio, setSucursalKmExtraPrecio] = useState(10);
+  const [sucursalIsLoading, setSucursalIsLoading] = useState(false);
+  const [sucursalError, setSucursalError] = useState("");
+  const [sucursalSuccess, setSucursalSuccess] = useState("");
+  const [sucursalShowRawJson, setSucursalShowRawJson] = useState(false);
+  const [sucursalRawJsonText, setSucursalRawJsonText] = useState("");
 
 
   // Staff edit modal states
@@ -593,6 +641,12 @@ export default function Dashboard() {
   const [isAdmin, setIsAdmin] = useState(true);
   const [isSuperAdmin, setIsSuperAdmin] = useState(false);
   const [userRole, setUserRole] = useState("Administrador");
+  const isBroker = userRole?.toLowerCase().includes("broker");
+  const [currentUserEmail, setCurrentUserEmail] = useState("");
+  const [currentUserName, setCurrentUserName] = useState("");
+  const [brokerSearch, setBrokerSearch] = useState("");
+  const [brokerTimeframe, setBrokerTimeframe] = useState<"day" | "week" | "month" | "year">("month");
+  const [brokerViewMode, setBrokerViewMode] = useState<"drivers" | "deliveries">("drivers");
   const [superAdminCompanies, setSuperAdminCompanies] = useState<any[]>([]);
   
   // Special Create Company Screen fields
@@ -601,6 +655,38 @@ export default function Dashboard() {
   const [newCompOwner, setNewCompOwner] = useState("");
   const [newCompEmail, setNewCompEmail] = useState("");
   const [newCompPassword, setNewCompPassword] = useState("");
+  const [newCompUsers, setNewCompUsers] = useState<{ id?: string; email: string; password?: string; name?: string }[]>([
+    { email: "", password: "", name: "" }
+  ]);
+
+  const handleAddCompUser = () => {
+    if (newCompUsers.length < 3) {
+      setNewCompUsers(prev => [...prev, { email: "", password: "", name: "" }]);
+    }
+  };
+
+  const handleRemoveCompUser = (idx: number) => {
+    if (newCompUsers.length > 1) {
+      setNewCompUsers(prev => {
+        const filtered = prev.filter((_, i) => i !== idx);
+        if (filtered[0]?.email) {
+          setNewCompEmail(filtered[0].email);
+        }
+        return filtered;
+      });
+    }
+  };
+
+  const handleUpdateCompUser = (idx: number, field: string, val: string) => {
+    setNewCompUsers(prev => {
+      const copy = [...prev];
+      copy[idx] = { ...copy[idx], [field]: val };
+      return copy;
+    });
+    if (idx === 0 && field === "email") {
+      setNewCompEmail(val);
+    }
+  };
   const [newCompUrl, setNewCompUrl] = useState("");
   const [newCompLogoPreview, setNewCompLogoPreview] = useState("");
   const [newCompLogoFile, setNewCompLogoFile] = useState<File | null>(null);
@@ -630,6 +716,38 @@ export default function Dashboard() {
   const [payShowClipApiKeyTest, setPayShowClipApiKeyTest] = useState(false);
   const [payShowClipApiKeyProd, setPayShowClipApiKeyProd] = useState(false);
   const [payConfigLoaded, setPayConfigLoaded] = useState(false);
+
+  // Web Customization (personalizacion_web) States
+  const [webRowId, setWebRowId] = useState<number | null>(null);
+  const [webLogo, setWebLogo] = useState("");
+  const [webPortada, setWebPortada] = useState("");
+  const [webGaleria, setWebGaleria] = useState<string[]>([]);
+  const [webColorTexto, setWebColorTexto] = useState("#0f172a");
+  const [webColorTitulos, setWebColorTitulos] = useState("#F7340C");
+  const [webColorFondo, setWebColorFondo] = useState("#ffffff");
+  const [webNumeroWhatsapp, setWebNumeroWhatsapp] = useState<string>("");
+  const [webCorreoGeneral, setWebCorreoGeneral] = useState("");
+  const [webInstagram, setWebInstagram] = useState("");
+  const [webFacebook, setWebFacebook] = useState("");
+  const [webTiktok, setWebTiktok] = useState("");
+  const [webMetaTitulo, setWebMetaTitulo] = useState("");
+  const [webMetaDescripcion, setWebMetaDescripcion] = useState("");
+  const [webOrdenWeb, setWebOrdenWeb] = useState<string[]>([
+    "hero",
+    "sucursales",
+    "productos",
+    "galeria",
+    "contacto"
+  ]);
+  const [webSucursalesActivas, setWebSucursalesActivas] = useState<string[]>([]);
+  const [webConfigLoaded, setWebConfigLoaded] = useState(false);
+  const [webIsLoading, setWebIsLoading] = useState(false);
+  const [webIsSaving, setWebIsSaving] = useState(false);
+  const [webError, setWebError] = useState("");
+  const [webMessage, setWebMessage] = useState("");
+  const [webLogoUploading, setWebLogoUploading] = useState(false);
+  const [webPortadaUploading, setWebPortadaUploading] = useState(false);
+  const [webGaleriaUploading, setWebGaleriaUploading] = useState(false);
 
   // CDMX Predefined coordinates zones for simple ordering
   const ZONES_COORDS: { [key: string]: [number, number] } = {
@@ -802,8 +920,10 @@ export default function Dashboard() {
         fetchSuperAdmins();
       }, 0);
       return () => clearTimeout(timer);
+    } else if (isBroker) {
+      fetchBrokerSucursales();
     }
-  }, [activeTab, isSuperAdmin]);
+  }, [activeTab, isSuperAdmin, isBroker]);
 
   // Sync currentCompanyId to staff registration company select
   useEffect(() => {
@@ -850,6 +970,12 @@ export default function Dashboard() {
           if (parsedProfile.role) {
             setUserRole(parsedProfile.role);
           }
+          if (parsedProfile.email || parsedProfile.mail) {
+            setCurrentUserEmail(parsedProfile.email || parsedProfile.mail);
+          }
+          if (parsedProfile.name) {
+            setCurrentUserName(parsedProfile.name);
+          }
         } catch {
           console.error("Error reading profile details from local storage");
         }
@@ -865,10 +991,13 @@ export default function Dashboard() {
         const { data: { user } } = await supabase.auth.getUser();
         if (user) {
           setAuthorized(true);
+          if (user.email) {
+            setCurrentUserEmail(user.email);
+          }
           
           const { data: dbUser, error: dbErr } = await supabase
             .from("users")
-            .select("superAdmin, isAdmin, Rol")
+            .select("superAdmin, isAdmin, Rol, name, mail")
             .eq("IDUser", user.id)
             .maybeSingle();
 
@@ -879,6 +1008,12 @@ export default function Dashboard() {
             setIsAdmin(isAdm);
             if (dbUser.Rol) {
               setUserRole(dbUser.Rol);
+            }
+            if (dbUser.name) {
+              setCurrentUserName(dbUser.name);
+            }
+            if (dbUser.mail) {
+              setCurrentUserEmail(dbUser.mail);
             }
             
             // Sync back to local storage if changed
@@ -1178,6 +1313,18 @@ export default function Dashboard() {
     setPayConfigLoaded(false);
   }, [currentCompanyId]);
 
+  // Auto-load web customization when tab is active
+  useEffect(() => {
+    if (activeTab === "web-customization" && !webConfigLoaded) {
+      loadWebCustomization();
+    }
+  }, [activeTab, webConfigLoaded, currentCompanyId]);
+
+  // Reset web customization loaded state when company changes
+  useEffect(() => {
+    setWebConfigLoaded(false);
+  }, [currentCompanyId]);
+
   const handleLogout = async () => {
     localStorage.removeItem("reparto_logged_in");
     localStorage.removeItem("reparto_user_profile");
@@ -1185,11 +1332,45 @@ export default function Dashboard() {
     router.push("/");
   };
 
+  const fetchBrokerSucursales = async () => {
+    try {
+      const { data, error } = await supabase
+        .from("Sucursales")
+        .select("*")
+        .order("created_at", { ascending: true });
+      if (!error && data) {
+        setBrokerSucursalesList(data);
+      }
+    } catch (err) {
+      console.warn("Error fetching broker sucursales:", err);
+    }
+  };
+
   const fetchBrokers = async () => {
     try {
       const { data, error } = await supabase.from("brokers").select("*");
       if (!error && data) {
-        setBrokersList(data);
+        const brokerIds = data.map((b: any) => b.id);
+        const statusMap = new Map();
+        if (brokerIds.length > 0) {
+          try {
+            const { data: usersData } = await supabase
+              .from("users")
+              .select("IDUser, status")
+              .in("IDUser", brokerIds);
+
+            (usersData || []).forEach((u: any) => statusMap.set(u.IDUser, u.status));
+          } catch (uErr) {
+            console.warn("Could not fetch broker user status:", uErr);
+          }
+        }
+
+        const merged = data.map((b: any) => ({
+          ...b,
+          status: b.status || statusMap.get(b.id) || "active"
+        }));
+
+        setBrokersList(merged);
       }
     } catch (err) {
       console.warn("Error fetching brokers:", err);
@@ -2391,6 +2572,7 @@ export default function Dashboard() {
     setNewCompOwner("");
     setNewCompEmail("");
     setNewCompPassword("");
+    setNewCompUsers([{ email: "", password: "", name: "" }]);
     setNewCompUrl("");
     setNewCompLogoPreview("");
     setNewCompLogoFile(null);
@@ -2400,19 +2582,45 @@ export default function Dashboard() {
     setCompIsLoading(false);
   };
 
-  const handleEditCompanyClick = (comp: any) => {
+  const handleEditCompanyClick = async (comp: any) => {
     setEditingCompany(comp);
     setCompError("");
     setCompMessage("");
     setNewCompName(comp.NombreEmpresa || comp.Nombre_Empresa || "");
     setNewCompOwner(comp.PropietarioEmpresa || comp.PropietarioEmpres || comp.PropietarioEmpresaNombre || "");
     setNewCompEmail(comp.mailEmpresa || "");
+    setNewCompPassword("");
     setNewCompUrl(comp.urlEmpresaUnico || "");
     setNewCompLogoPreview(comp.logoEmpresa || comp.foto_empresa || "");
     setNewCompLogoFile(null);
     setNewCompPhones(comp.TelefonosEmpresa && comp.TelefonosEmpresa.length > 0 ? comp.TelefonosEmpresa : [""]);
     setNewCompDesc(comp.DescripcionEmpresa || "");
     setNewCompAddress(comp.DireccionEmpresa || "");
+
+    // Fetch existing users from 'users' table for this company (up to 3)
+    try {
+      const { data: dbUsers, error } = await supabase
+        .from("users")
+        .select("*")
+        .eq("IDEmpresa", comp.idEmpresa);
+
+      if (!error && dbUsers && dbUsers.length > 0) {
+        // Prioritize admin users
+        const adminUsers = dbUsers.filter((u: any) => u.isAdmin || u.Rol === "Administrador");
+        const usersToUse = adminUsers.length > 0 ? adminUsers : dbUsers;
+        const mappedUsers = usersToUse.slice(0, 3).map((u: any) => ({
+          id: u.IDUser,
+          email: u.mail || "",
+          name: u.name || comp.PropietarioEmpresaNombre || comp.PropietarioEmpresa || "",
+          password: ""
+        }));
+        setNewCompUsers(mappedUsers.length > 0 ? mappedUsers : [{ email: comp.mailEmpresa || "", password: "", name: comp.PropietarioEmpresaNombre || "" }]);
+      } else {
+        setNewCompUsers([{ email: comp.mailEmpresa || "", password: "", name: comp.PropietarioEmpresaNombre || "" }]);
+      }
+    } catch {
+      setNewCompUsers([{ email: comp.mailEmpresa || "", password: "", name: comp.PropietarioEmpresaNombre || "" }]);
+    }
   };
 
   const handleDeleteCompanyClick = async (idEmpresa: string, name: string) => {
@@ -2502,10 +2710,117 @@ export default function Dashboard() {
     fetchSaCompanies();
   };
 
+  const resetBrokerForm = () => {
+    setEditingBroker(null);
+    setEditBrokerStatus("active");
+    setNewBrokerName("");
+    setNewBrokerEmail("");
+    setNewBrokerPhone("");
+    setNewBrokerPassword("");
+    setNewBrokerCompanies([]);
+    setBrokerError("");
+    setBrokerMessage("");
+  };
+
+  const handleEditBrokerClick = (broker: any) => {
+    setEditingBroker(broker);
+    setEditBrokerStatus(broker.status || "active");
+    setBrokerError("");
+    setBrokerMessage("");
+    setNewBrokerName(broker.name || "");
+    setNewBrokerEmail(broker.email || "");
+    setNewBrokerPhone(broker.phone || "");
+    setNewBrokerPassword("");
+    setNewBrokerCompanies(broker.empresas_asociadas || []);
+  };
+
+  const handleToggleBrokerStatus = async (id: string, name: string, currentStatus: string) => {
+    if (!isSuperAdmin) {
+      alert("Acción no autorizada. Solo los SuperAdministradores pueden gestionar el estado de los brokers.");
+      return;
+    }
+
+    const newStatus = currentStatus === "suspended" ? "active" : "suspended";
+    const isSuspending = newStatus === "suspended";
+
+    const confirm = window.confirm(
+      isSuspending
+        ? `¿Estás seguro de que deseas suspender al broker "${name}"? El broker quedará inhabilitado temporalmente.`
+        : `¿Estás seguro de que deseas reactivar al broker "${name}"? Su cuenta volverá a estar activa.`
+    );
+    if (!confirm) return;
+
+    setBrokerIsLoading(true);
+    setBrokerError("");
+    setBrokerMessage("");
+
+    try {
+      // 1. Update in users table
+      const { error: userErr } = await supabase
+        .from("users")
+        .update({ status: newStatus })
+        .eq("IDUser", id);
+
+      if (userErr) {
+        console.warn("Error updating user status:", userErr.message);
+      }
+
+      // 2. Try updating in brokers table if column exists
+      try {
+        await supabase
+          .from("brokers")
+          .update({ status: newStatus })
+          .eq("id", id);
+      } catch (err) {
+        console.warn("Brokers table might not have status column:", err);
+      }
+
+      // 3. Update localStorage fallback
+      try {
+        const localUsers = JSON.parse(localStorage.getItem("reparto_local_users") || "[]");
+        const idx = localUsers.findIndex((u: any) => u.IDUser === id);
+        if (idx !== -1) {
+          localUsers[idx].status = newStatus;
+          localStorage.setItem("reparto_local_users", JSON.stringify(localUsers));
+        }
+      } catch (e) {
+        console.warn("Local storage update error:", e);
+      }
+
+      // 4. Update local state
+      setBrokersList(prev => prev.map(b => b.id === id ? { ...b, status: newStatus } : b));
+      if (editingBroker?.id === id) {
+        setEditingBroker({ ...editingBroker, status: newStatus });
+        setEditBrokerStatus(newStatus);
+      }
+
+      setBrokerMessage(
+        isSuspending
+          ? `El broker "${name}" ha sido suspendido.`
+          : `El broker "${name}" ha sido reactivado exitosamente.`
+      );
+    } catch (err: any) {
+      console.error("Error al cambiar estado del broker:", err);
+      setBrokerError(err.message || "Ocurrió un error al cambiar el estado del broker.");
+    } finally {
+      setBrokerIsLoading(false);
+    }
+  };
+
   const handleCreateBroker = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newBrokerName.trim() || !newBrokerEmail.trim() || !newBrokerPassword.trim()) {
+    if (!isSuperAdmin) {
+      setBrokerError("Acción no autorizada. Solo los SuperAdministradores pueden gestionar brokers.");
+      return;
+    }
+
+    if (!newBrokerName.trim() || !newBrokerEmail.trim()) {
       setBrokerError("Por favor, llena los campos obligatorios (*).");
+      return;
+    }
+
+    if (!editingBroker && !newBrokerPassword.trim()) {
+      setBrokerError("Por favor, ingresa una contraseña para el broker.");
       return;
     }
 
@@ -2514,75 +2829,592 @@ export default function Dashboard() {
     setBrokerMessage("");
 
     try {
-      const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || "";
-      const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || "";
-      
-      const response = await fetch(`${supabaseUrl}/auth/v1/signup`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "apikey": supabaseAnonKey
-        },
-        body: JSON.stringify({
+      if (editingBroker) {
+        // --- EDITAR BROKER EXISTENTE ---
+        try {
+          await supabase
+            .from("brokers")
+            .update({
+              name: newBrokerName.trim(),
+              email: newBrokerEmail.trim().toLowerCase(),
+              phone: newBrokerPhone.trim(),
+              empresas_asociadas: newBrokerCompanies,
+              status: editBrokerStatus
+            })
+            .eq("id", editingBroker.id);
+        } catch {
+          await supabase
+            .from("brokers")
+            .update({
+              name: newBrokerName.trim(),
+              email: newBrokerEmail.trim().toLowerCase(),
+              phone: newBrokerPhone.trim(),
+              empresas_asociadas: newBrokerCompanies
+            })
+            .eq("id", editingBroker.id);
+        }
+
+        // Actualizar en tabla users
+        const cleanedPhone = newBrokerPhone.trim().replace(/\D/g, "");
+        const { error: userErr } = await supabase
+          .from("users")
+          .update({
+            name: newBrokerName.trim(),
+            mail: newBrokerEmail.trim().toLowerCase(),
+            phone: cleanedPhone ? Number(cleanedPhone) : null,
+            status: editBrokerStatus
+          })
+          .eq("IDUser", editingBroker.id);
+
+        if (userErr) {
+          console.warn("User table update note:", userErr.message);
+        }
+
+        // Actualizar en fallback local
+        try {
+          const localUsers = JSON.parse(localStorage.getItem("reparto_local_users") || "[]");
+          const idx = localUsers.findIndex((u: any) => u.IDUser === editingBroker.id);
+          if (idx !== -1) {
+            localUsers[idx].name = newBrokerName.trim();
+            localUsers[idx].mail = newBrokerEmail.trim().toLowerCase();
+            localUsers[idx].phone = cleanedPhone ? Number(cleanedPhone) : null;
+            localUsers[idx].status = editBrokerStatus;
+            if (newBrokerPassword.trim()) {
+              localUsers[idx].password = newBrokerPassword.trim();
+            }
+            localStorage.setItem("reparto_local_users", JSON.stringify(localUsers));
+          }
+        } catch (e) {
+          console.warn("Local storage update error:", e);
+        }
+
+        setBrokerMessage(`Broker "${newBrokerName.trim()}" actualizado exitosamente.`);
+        resetBrokerForm();
+        fetchBrokers();
+      } else {
+        // --- CREAR NUEVO BROKER ---
+        const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || "";
+        const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || "";
+        
+        let newUserId = crypto.randomUUID();
+
+        try {
+          const response = await fetch(`${supabaseUrl}/auth/v1/signup`, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "apikey": supabaseAnonKey
+            },
+            body: JSON.stringify({
+              email: newBrokerEmail.trim().toLowerCase(),
+              password: newBrokerPassword,
+              options: {
+                data: {
+                  name: newBrokerName.trim(),
+                  role: "Broker"
+                }
+              }
+            })
+          });
+
+          const resData = await response.json();
+          if (response.ok && !resData.error && !resData.msg) {
+            newUserId = resData?.user?.id || resData?.id || newUserId;
+          } else {
+            const errorMsg = resData?.error_description || resData?.msg || resData?.message || resData?.error?.message;
+            if (errorMsg === "User already registered") {
+              throw new Error("El correo electrónico ya se encuentra registrado en la plataforma.");
+            } else {
+              console.warn("Supabase Auth sign up note:", errorMsg);
+            }
+          }
+        } catch (authErr: any) {
+          if (authErr.message?.includes("ya se encuentra registrado")) {
+            throw authErr;
+          }
+          console.warn("Auth signup fallback, using generated UUID:", authErr);
+        }
+
+        // Insert into brokers table
+        const { error: brokerErr } = await supabase.from("brokers").insert({
+          id: newUserId,
+          name: newBrokerName.trim(),
           email: newBrokerEmail.trim().toLowerCase(),
-          password: newBrokerPassword
-        })
-      });
+          phone: newBrokerPhone.trim(),
+          empresas_asociadas: newBrokerCompanies
+        });
 
-      const resData = await response.json();
-      if (!response.ok) {
-        throw new Error(resData?.error_description || resData?.msg || "Error creando usuario en Auth");
+        if (brokerErr) throw brokerErr;
+
+        // Insert into users table
+        const cleanedPhone = newBrokerPhone.trim().replace(/\D/g, "");
+        const { error: userErr } = await supabase.from("users").upsert({
+          IDUser: newUserId,
+          name: newBrokerName.trim(),
+          mail: newBrokerEmail.trim().toLowerCase(),
+          Rol: "Broker",
+          phone: cleanedPhone ? Number(cleanedPhone) : null,
+          status: "active",
+          isAdmin: false,
+          superAdmin: false
+        }, { onConflict: "IDUser" });
+        
+        if (userErr) {
+          console.warn("Users table upsert note:", userErr.message);
+        }
+
+        // Save locally for fallback login checks
+        try {
+          const localUsers = JSON.parse(localStorage.getItem("reparto_local_users") || "[]");
+          localUsers.push({
+            IDUser: newUserId,
+            name: newBrokerName.trim(),
+            mail: newBrokerEmail.trim().toLowerCase(),
+            Rol: "Broker",
+            phone: cleanedPhone ? Number(cleanedPhone) : null,
+            status: "active",
+            isAdmin: false,
+            superAdmin: false,
+            password: newBrokerPassword.trim()
+          });
+          localStorage.setItem("reparto_local_users", JSON.stringify(localUsers));
+        } catch (e) {
+          console.error("Local storage error:", e);
+        }
+
+        await sendWelcomeEmail({
+          name: newBrokerName,
+          email: newBrokerEmail,
+          role: "Broker de Repartidores",
+          password: newBrokerPassword,
+          phone: newBrokerPhone
+        });
+
+        setBrokerMessage(`Broker "${newBrokerName.trim()}" registrado exitosamente.`);
+        resetBrokerForm();
+        fetchBrokers();
       }
-
-      const newUserId = resData?.user?.id;
-      if (!newUserId) throw new Error("No se devolvió ID del usuario");
-
-      // Insert into brokers table
-      const { error: brokerErr } = await supabase.from("brokers").insert({
-        id: newUserId,
-        name: newBrokerName.trim(),
-        email: newBrokerEmail.trim().toLowerCase(),
-        phone: newBrokerPhone.trim(),
-        empresas_asociadas: newBrokerCompanies
-      });
-
-      if (brokerErr) throw brokerErr;
-
-      // ALSO insert into users table so they can log in seamlessly
-      const { error: userErr } = await supabase.from("users").insert({
-        IDUser: newUserId,
-        name: newBrokerName.trim(),
-        mail: newBrokerEmail.trim().toLowerCase(),
-        Rol: "Broker",
-        phone: newBrokerPhone ? Number(newBrokerPhone) : null,
-        status: "active",
-        isAdmin: false,
-        superAdmin: false
-      });
-      
-      if (userErr) throw userErr;
-
-      await sendWelcomeEmail({
-        name: newBrokerName,
-        email: newBrokerEmail,
-        role: "Broker de Repartidores",
-        password: newBrokerPassword,
-        phone: newBrokerPhone
-      });
-
-      setBrokerMessage("Broker creado exitosamente.");
-      setNewBrokerName("");
-      setNewBrokerEmail("");
-      setNewBrokerPhone("");
-      setNewBrokerPassword("");
-      setNewBrokerCompanies([]);
-      fetchBrokers();
-
     } catch (err: any) {
       console.error(err);
-      setBrokerError(err.message || "Ocurrió un error al crear el Broker.");
+      setBrokerError(err.message || "Ocurrió un error al procesar el Broker.");
     } finally {
       setBrokerIsLoading(false);
+    }
+  };
+
+  // --- REPARTIDORES CRUD (Direct Supabase 'repartidores' table) ---
+  const handleOpenCreateRepartidor = (defaultBrokerId?: string) => {
+    setEditingRepartidor(null);
+    setRepName("");
+    setRepEmail("");
+    setRepPhone("");
+    setRepBrokerId(defaultBrokerId || "");
+    setRepDriverPhotos([]);
+    setRepVehiclePhotos([]);
+    setRepDriverPhotoFiles([]);
+    setRepVehiclePhotoFiles([]);
+    setRepDriverPhotoPreviews([]);
+    setRepVehiclePhotoPreviews([]);
+    setRepError("");
+    setRepSuccess("");
+    setIsRepartidorModalOpen(true);
+  };
+
+  const handleOpenEditRepartidor = (rep: any) => {
+    setEditingRepartidor(rep);
+    setRepName(rep.name || "");
+    setRepEmail(rep.email || "");
+    setRepPhone(rep.phone || "");
+    setRepBrokerId(rep.broker_id || "");
+    
+    // Existing URLs
+    const driverUrls: string[] = Array.isArray(rep.driver_photos) ? rep.driver_photos : [];
+    const vehicleUrls: string[] = Array.isArray(rep.vehicle_photos) ? rep.vehicle_photos : [];
+    setRepDriverPhotos(driverUrls);
+    setRepVehiclePhotos(vehicleUrls);
+    setRepDriverPhotoPreviews(driverUrls);
+    setRepVehiclePhotoPreviews(vehicleUrls);
+
+    setRepDriverPhotoFiles([]);
+    setRepVehiclePhotoFiles([]);
+    setRepError("");
+    setRepSuccess("");
+    setIsRepartidorModalOpen(true);
+  };
+
+  const handleCloseRepartidorModal = () => {
+    setIsRepartidorModalOpen(false);
+    setEditingRepartidor(null);
+    setRepError("");
+    setRepSuccess("");
+  };
+
+  const handleRepDriverPhotosSelected = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (!files || files.length === 0) return;
+    const newFiles: File[] = Array.from(files);
+    setRepDriverPhotoFiles(prev => [...prev, ...newFiles]);
+    
+    newFiles.forEach(file => {
+      const reader = new FileReader();
+      reader.onload = (ev) => {
+        if (ev.target?.result) {
+          setRepDriverPhotoPreviews(prev => [...prev, ev.target!.result as string]);
+        }
+      };
+      reader.readAsDataURL(file);
+    });
+  };
+
+  const handleRemoveRepDriverPhoto = (index: number) => {
+    if (index < repDriverPhotos.length) {
+      setRepDriverPhotos(prev => prev.filter((_, idx) => idx !== index));
+      setRepDriverPhotoPreviews(prev => prev.filter((_, idx) => idx !== index));
+    } else {
+      const fileIdx = index - repDriverPhotos.length;
+      setRepDriverPhotoFiles(prev => prev.filter((_, idx) => idx !== fileIdx));
+      setRepDriverPhotoPreviews(prev => prev.filter((_, idx) => idx !== index));
+    }
+  };
+
+  const handleRepVehiclePhotosSelected = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (!files || files.length === 0) return;
+    const newFiles: File[] = Array.from(files);
+    setRepVehiclePhotoFiles(prev => [...prev, ...newFiles]);
+
+    newFiles.forEach(file => {
+      const reader = new FileReader();
+      reader.onload = (ev) => {
+        if (ev.target?.result) {
+          setRepVehiclePhotoPreviews(prev => [...prev, ev.target!.result as string]);
+        }
+      };
+      reader.readAsDataURL(file);
+    });
+  };
+
+  const handleRemoveRepVehiclePhoto = (index: number) => {
+    if (index < repVehiclePhotos.length) {
+      setRepVehiclePhotos(prev => prev.filter((_, idx) => idx !== index));
+      setRepVehiclePhotoPreviews(prev => prev.filter((_, idx) => idx !== index));
+    } else {
+      const fileIdx = index - repVehiclePhotos.length;
+      setRepVehiclePhotoFiles(prev => prev.filter((_, idx) => idx !== fileIdx));
+      setRepVehiclePhotoPreviews(prev => prev.filter((_, idx) => idx !== index));
+    }
+  };
+
+  const handleSaveRepartidor = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!repName.trim() || !repEmail.trim()) {
+      setRepError("El nombre y el correo electrónico son obligatorios.");
+      return;
+    }
+
+    setRepIsLoading(true);
+    setRepError("");
+    setRepSuccess("");
+
+    try {
+      // 1. Upload new driver photos if any
+      const uploadedDriverUrls: string[] = [];
+      for (const file of repDriverPhotoFiles) {
+        try {
+          const fileName = `repartidores/driver_${Date.now()}_${file.name.replace(/[^a-zA-Z0-9.]/g, '_')}`;
+          const { data: uploadData, error: upErr } = await supabase.storage
+            .from("general")
+            .upload(fileName, file, { cacheControl: "3600", upsert: false });
+          if (!upErr && uploadData) {
+            const { data: urlData } = supabase.storage.from("general").getPublicUrl(fileName);
+            uploadedDriverUrls.push(urlData.publicUrl);
+          } else {
+            console.warn("Driver photo upload failed:", upErr);
+          }
+        } catch (fErr) {
+          console.error("Error uploading driver photo file:", fErr);
+        }
+      }
+
+      // 2. Upload new vehicle photos if any
+      const uploadedVehicleUrls: string[] = [];
+      for (const file of repVehiclePhotoFiles) {
+        try {
+          const fileName = `repartidores/vehicle_${Date.now()}_${file.name.replace(/[^a-zA-Z0-9.]/g, '_')}`;
+          const { data: uploadData, error: upErr } = await supabase.storage
+            .from("general")
+            .upload(fileName, file, { cacheControl: "3600", upsert: false });
+          if (!upErr && uploadData) {
+            const { data: urlData } = supabase.storage.from("general").getPublicUrl(fileName);
+            uploadedVehicleUrls.push(urlData.publicUrl);
+          } else {
+            console.warn("Vehicle photo upload failed:", upErr);
+          }
+        } catch (fErr) {
+          console.error("Error uploading vehicle photo file:", fErr);
+        }
+      }
+
+      const finalDriverPhotos = [...repDriverPhotos, ...uploadedDriverUrls];
+      const finalVehiclePhotos = [...repVehiclePhotos, ...uploadedVehicleUrls];
+
+      const payload = {
+        name: repName.trim(),
+        email: repEmail.trim().toLowerCase(),
+        phone: repPhone.trim() || null,
+        broker_id: repBrokerId && repBrokerId.trim() ? repBrokerId.trim() : null,
+        driver_photos: finalDriverPhotos,
+        vehicle_photos: finalVehiclePhotos,
+        reviews: editingRepartidor?.reviews || []
+      };
+
+      if (editingRepartidor) {
+        const targetId = editingRepartidor.id_repartidor || editingRepartidor.id;
+        const { error: updateErr } = await supabase
+          .from("repartidores")
+          .update(payload)
+          .eq("id_repartidor", targetId);
+
+        if (updateErr) throw updateErr;
+
+        setRepSuccess(`Repartidor "${repName.trim()}" actualizado exitosamente.`);
+      } else {
+        const { error: insertErr } = await supabase
+          .from("repartidores")
+          .insert([payload]);
+
+        if (insertErr) throw insertErr;
+
+        setRepSuccess(`Repartidor "${repName.trim()}" registrado exitosamente.`);
+      }
+
+      // Refresh broker sucursales
+      await fetchBrokerSucursales();
+
+      setTimeout(() => {
+        setIsRepartidorModalOpen(false);
+        setEditingRepartidor(null);
+      }, 700);
+
+    } catch (err: any) {
+      console.error("Error saving repartidor:", err);
+      setRepError(err.message || "Error al guardar el repartidor en la base de datos.");
+    } finally {
+      setRepIsLoading(false);
+    }
+  };
+
+  const handleDeleteRepartidor = async (id: string, name: string) => {
+    const confirm = window.confirm(
+      `¿Estás seguro de que deseas eliminar permanentemente al repartidor "${name || 'este repartidor'}" de la red?\n\nEsta acción borrará su registro de la tabla 'repartidores' de la base de datos y no se podrá deshacer.`
+    );
+    if (!confirm) return;
+
+    try {
+      const { error } = await supabase
+        .from("repartidores")
+        .delete()
+        .eq("id_repartidor", id);
+
+      if (error) throw error;
+
+      await fetchBrokerSucursales();
+    } catch (err: any) {
+      console.error("Error deleting repartidor:", err);
+      alert("Error al eliminar el repartidor: " + (err.message || "Inténtalo de nuevo."));
+    }
+  };
+
+  // --- SUCURSALES & TARIFAS (Broker Management on 'Sucursales' table) ---
+  const handleOpenEditSucursal = (sucursal: any) => {
+    setEditingSucursal(sucursal);
+    setSucursalFormDireccion(sucursal.DireccionSucursal || "");
+    setSucursalFormLatitud(sucursal.Latitud !== null && sucursal.Latitud !== undefined ? String(sucursal.Latitud) : "");
+    setSucursalFormLongitud(sucursal.Longitud !== null && sucursal.Longitud !== undefined ? String(sucursal.Longitud) : "");
+    setSucursalFormLinkGoogleMaps(sucursal.LinkGoogleMaps || "");
+
+    const existingFotos: string[] = Array.isArray(sucursal.FotosSucursales) 
+      ? sucursal.FotosSucursales 
+      : (Array.isArray(sucursal.FotosSucursal) ? sucursal.FotosSucursal : []);
+    setSucursalFormFotos(existingFotos);
+    setSucursalFormPhotoPreviews(existingFotos);
+    setSucursalFormPhotoFiles([]);
+
+    let rawTarifas = sucursal.Tarifas;
+    if (typeof rawTarifas === "string") {
+      try { rawTarifas = JSON.parse(rawTarifas); } catch { rawTarifas = []; }
+    }
+    if (!Array.isArray(rawTarifas)) rawTarifas = [];
+
+    const ranges: { min_km: number; max_km: number; precio: number }[] = [];
+    let hasKmExtra = false;
+    let extraPrecio = 10;
+
+    rawTarifas.forEach((item: any) => {
+      if (item.km_extra || item.precio_por_km !== undefined) {
+        hasKmExtra = true;
+        extraPrecio = Number(item.precio_por_km) || 10;
+      } else if (item.precio !== undefined) {
+        ranges.push({
+          min_km: Number(item.min_km) || 0,
+          max_km: Number(item.max_km) || 0,
+          precio: Number(item.precio) || 0
+        });
+      }
+    });
+
+    if (ranges.length === 0) {
+      ranges.push({ min_km: 0, max_km: 5, precio: 40 });
+    }
+
+    setSucursalFormTarifas(ranges);
+    setSucursalKmExtraEnabled(hasKmExtra);
+    setSucursalKmExtraPrecio(extraPrecio);
+    setSucursalRawJsonText(JSON.stringify(rawTarifas, null, 2));
+    setSucursalShowRawJson(false);
+    setSucursalError("");
+    setSucursalSuccess("");
+    setSucursalModalOpen(true);
+  };
+
+  const handleCloseSucursalModal = () => {
+    setSucursalModalOpen(false);
+    setEditingSucursal(null);
+    setSucursalError("");
+    setSucursalSuccess("");
+  };
+
+  const handleSucursalPhotosSelected = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (!files || files.length === 0) return;
+    const newFiles: File[] = Array.from(files);
+    setSucursalFormPhotoFiles(prev => [...prev, ...newFiles]);
+
+    newFiles.forEach(file => {
+      const reader = new FileReader();
+      reader.onload = (ev) => {
+        if (ev.target?.result) {
+          setSucursalFormPhotoPreviews(prev => [...prev, ev.target!.result as string]);
+        }
+      };
+      reader.readAsDataURL(file);
+    });
+  };
+
+  const handleRemoveSucursalPhoto = (index: number) => {
+    if (index < sucursalFormFotos.length) {
+      setSucursalFormFotos(prev => prev.filter((_, idx) => idx !== index));
+      setSucursalFormPhotoPreviews(prev => prev.filter((_, idx) => idx !== index));
+    } else {
+      const fileIdx = index - sucursalFormFotos.length;
+      setSucursalFormPhotoFiles(prev => prev.filter((_, idx) => idx !== fileIdx));
+      setSucursalFormPhotoPreviews(prev => prev.filter((_, idx) => idx !== index));
+    }
+  };
+
+  const handleAddTarifaTier = () => {
+    const lastTier = sucursalFormTarifas[sucursalFormTarifas.length - 1];
+    const newMin = lastTier ? Number(lastTier.max_km) : 0;
+    const newMax = newMin + 5;
+    const newPrice = lastTier ? Number(lastTier.precio) + 15 : 40;
+    setSucursalFormTarifas(prev => [...prev, { min_km: newMin, max_km: newMax, precio: newPrice }]);
+  };
+
+  const handleUpdateTarifaTier = (index: number, field: "min_km" | "max_km" | "precio", val: number) => {
+    setSucursalFormTarifas(prev => {
+      const updated = [...prev];
+      updated[index] = { ...updated[index], [field]: val };
+      return updated;
+    });
+  };
+
+  const handleRemoveTarifaTier = (index: number) => {
+    setSucursalFormTarifas(prev => prev.filter((_, idx) => idx !== index));
+  };
+
+  const handleSaveSucursal = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingSucursal) return;
+
+    setSucursalIsLoading(true);
+    setSucursalError("");
+    setSucursalSuccess("");
+
+    try {
+      // 1. Upload new photos to Supabase Storage if any
+      const uploadedUrls: string[] = [];
+      for (const file of sucursalFormPhotoFiles) {
+        try {
+          const fileName = `sucursales/${Date.now()}_${file.name.replace(/[^a-zA-Z0-9.]/g, '_')}`;
+          const { data: uploadData, error: upErr } = await supabase.storage
+            .from("general")
+            .upload(fileName, file, { cacheControl: "3600", upsert: false });
+          if (!upErr && uploadData) {
+            const { data: urlData } = supabase.storage.from("general").getPublicUrl(fileName);
+            uploadedUrls.push(urlData.publicUrl);
+          } else {
+            console.warn("Sucursal photo upload warning:", upErr);
+          }
+        } catch (fErr) {
+          console.error("Error uploading photo:", fErr);
+        }
+      }
+
+      const finalFotos = [...sucursalFormFotos, ...uploadedUrls];
+
+      // 2. Build final Tarifas JSON
+      let finalTarifas: any[] = [];
+      if (sucursalShowRawJson) {
+        try {
+          finalTarifas = JSON.parse(sucursalRawJsonText);
+        } catch (jsonErr: any) {
+          setSucursalError("El formato JSON de Tarifas es inválido: " + jsonErr.message);
+          setSucursalIsLoading(false);
+          return;
+        }
+      } else {
+        finalTarifas = sucursalFormTarifas.map(t => ({
+          min_km: Number(t.min_km),
+          max_km: Number(t.max_km),
+          precio: Number(t.precio)
+        }));
+        if (sucursalKmExtraEnabled) {
+          finalTarifas.push({
+            km_extra: true,
+            precio_por_km: Number(sucursalKmExtraPrecio)
+          });
+        }
+      }
+
+      const updatePayload = {
+        DireccionSucursal: sucursalFormDireccion.trim() || null,
+        Latitud: sucursalFormLatitud !== "" ? Number(sucursalFormLatitud) : null,
+        Longitud: sucursalFormLongitud !== "" ? Number(sucursalFormLongitud) : null,
+        LinkGoogleMaps: sucursalFormLinkGoogleMaps.trim() || null,
+        FotosSucursales: finalFotos,
+        Tarifas: finalTarifas
+      };
+
+      const { error: updateErr } = await supabase
+        .from("Sucursales")
+        .update(updatePayload)
+        .eq("IDSucursal", editingSucursal.IDSucursal);
+
+      if (updateErr) throw updateErr;
+
+      setSucursalSuccess("¡Configuración de sucursal y tarifas actualizada exitosamente!");
+      await fetchBrokerSucursales();
+
+      setTimeout(() => {
+        setSucursalModalOpen(false);
+        setEditingSucursal(null);
+      }, 700);
+
+    } catch (err: any) {
+      console.error("Error saving sucursal changes:", err);
+      setSucursalError(err.message || "Error al actualizar la sucursal.");
+    } finally {
+      setSucursalIsLoading(false);
     }
   };
 
@@ -2595,14 +3427,25 @@ export default function Dashboard() {
 
     const companyIdToUse = editingCompany ? editingCompany.idEmpresa : (newCompId || generateRandomCompanyId());
 
-    if (!companyIdToUse || !newCompName.trim() || !newCompOwner.trim() || !newCompEmail.trim() || !newCompUrl.trim()) {
+    if (!companyIdToUse || !newCompName.trim() || !newCompOwner.trim() || !newCompUrl.trim()) {
       setCompError("Por favor, llena todos los campos obligatorios (*).");
       return;
     }
 
-    if (!editingCompany && !newCompPassword.trim()) {
-      setCompError("Por favor, ingresa la contraseña para el primer usuario administrador.");
+    // Filter valid users from newCompUsers (must have non-empty email)
+    const validUsers = newCompUsers.filter(u => u.email && u.email.trim() !== "");
+    if (validUsers.length === 0) {
+      setCompError("Por favor, ingresa al menos un usuario administrador con correo electrónico.");
       return;
+    }
+
+    // Validate that new users (without existing id) have a password of at least 6 chars
+    for (let i = 0; i < validUsers.length; i++) {
+      const u = validUsers[i];
+      if (!u.id && (!u.password || u.password.trim().length < 6)) {
+        setCompError(`El usuario ${u.email || `#${i + 1}`} requiere una contraseña de al menos 6 caracteres.`);
+        return;
+      }
     }
 
     if (!newCompLogoFile && !newCompLogoPreview) {
@@ -2611,63 +3454,11 @@ export default function Dashboard() {
     }
 
     const cleanedPhones = newCompPhones.filter(phone => phone.trim() !== "");
+    const primaryEmail = validUsers[0].email.trim().toLowerCase();
 
     setCompIsLoading(true);
     setCompError("");
     setCompMessage("");
-
-    // A. Create First Admin User in Supabase Auth if registering a new company
-    let firstAdminId = crypto.randomUUID();
-    let authSuccess = false;
-
-    if (!editingCompany) {
-      try {
-        const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || "";
-        const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || "";
-        
-        const response = await fetch(`${supabaseUrl}/auth/v1/signup`, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "apikey": supabaseAnonKey
-          },
-          body: JSON.stringify({
-            email: newCompEmail.trim().toLowerCase(),
-            password: newCompPassword,
-            options: {
-              data: {
-                name: newCompOwner.trim(),
-                role: "Administrador"
-              }
-            }
-          })
-        });
-
-        const resData = await response.json();
-
-        if (response.ok && !resData.error && !resData.msg) {
-          const finalUserId = resData.id || resData.user?.id;
-          if (finalUserId) {
-            firstAdminId = finalUserId;
-            authSuccess = true;
-          }
-        } else {
-          let errorMsg = resData.msg || resData.message || resData.error?.message || resData.error_description || resData.error || "Unknown error";
-          if (errorMsg === "User already registered") {
-            errorMsg = "El correo del administrador ya está registrado en la plataforma.";
-          }
-          console.warn("Supabase Auth first admin user registration failed:", errorMsg);
-          setCompError(`Error al registrar el primer administrador: ${errorMsg}`);
-          setCompIsLoading(false);
-          return;
-        }
-      } catch (err: any) {
-        console.warn("Auth signup exception:", err);
-        setCompError(`Excepción al crear usuario administrador: ${err.message || err}`);
-        setCompIsLoading(false);
-        return;
-      }
-    }
 
     let uploadedLogoUrl = newCompLogoPreview;
     
@@ -2704,7 +3495,7 @@ export default function Dashboard() {
       NombreEmpresa: newCompName.trim(),
       Nombre_Empresa: newCompName.trim(),
       PropietarioEmpresaNombre: newCompOwner.trim(),
-      mailEmpresa: newCompEmail.trim().toLowerCase(),
+      mailEmpresa: primaryEmail,
       urlEmpresaUnico: newCompUrl.trim().toLowerCase(),
       logoEmpresa: uploadedLogoUrl,
       foto_empresa: uploadedLogoUrl,
@@ -2715,6 +3506,7 @@ export default function Dashboard() {
     };
 
     let processedInDb = false;
+    const processedUserIds: string[] = [];
 
     try {
       if (editingCompany) {
@@ -2732,9 +3524,7 @@ export default function Dashboard() {
           })
           .eq("idEmpresa", companyIdToUse);
 
-        if (!dbErr) {
-          processedInDb = true;
-        } else {
+        if (dbErr) {
           console.warn("Database update failed: ", dbErr.message);
           throw dbErr;
         }
@@ -2758,37 +3548,177 @@ export default function Dashboard() {
           console.warn("Database insert failed: ", dbErr.message);
           throw dbErr;
         }
+      }
 
-        // Step 2: Insert the first admin user profile in public.users table (using upsert to avoid conflicts)
-        const phoneVal = cleanedPhones[0] ? Number(cleanedPhones[0].replace(/\D/g, '')) : null;
-        const newUserProfile = {
-          IDUser: firstAdminId,
-          name: newCompOwner.trim(),
-          mail: newCompEmail.trim().toLowerCase(),
-          isAdmin: true,
-          superAdmin: false,
-          Rol: "Administrador",
-          phone: phoneVal,
-          IDEmpresa: companyIdToUse.trim(),
-          foto: null,
-          Sucursales: [],
-          TipoVehiculo: null,
-          ModeloVehiculo: null,
-          Placas: null,
-          FotosDelVehiculo: []
-        };
+      // Step 2: Process up to 3 authenticated users in Supabase Auth & public.users table
+      // CRITICAL: We use direct fetch to ${supabaseUrl}/auth/v1/signup with apikey
+      // This DOES NOT touch localStorage or supabaseClient session, keeping SuperAdmin logged in!
+      const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || "";
+      const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || "";
+      const phoneVal = cleanedPhones[0] ? Number(cleanedPhones[0].replace(/\D/g, '')) : null;
 
-        const { error: userErr } = await supabase
-          .from("users")
-          .upsert(newUserProfile, { onConflict: "IDUser" });
+      for (const u of validUsers) {
+        const userEmail = u.email.trim().toLowerCase();
+        const userName = (u.name || newCompOwner).trim();
+        let targetUserId = u.id;
 
-        if (userErr) {
-          console.warn("Saving company admin user profile failed: ", userErr.message);
-          throw userErr;
+        // If user is new (no id) OR has password provided:
+        if (!targetUserId || (u.password && u.password.trim().length >= 6)) {
+          try {
+            const signupRes = await fetch(`${supabaseUrl}/auth/v1/signup`, {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+                "apikey": supabaseAnonKey
+              },
+              body: JSON.stringify({
+                email: userEmail,
+                password: u.password?.trim() || "Temp123456!",
+                options: {
+                  data: {
+                    name: userName,
+                    role: "Administrador"
+                  }
+                }
+              })
+            });
+
+            const resData = await signupRes.json();
+            if (signupRes.ok && (resData.id || resData.user?.id)) {
+              targetUserId = resData.id || resData.user?.id;
+            } else {
+              // If already registered, find their IDUser from public.users or retain existing
+              console.warn(`Auth signup response note for ${userEmail}:`, resData.msg || resData.message || resData.error?.message);
+              if (!targetUserId) {
+                const { data: existingUser } = await supabase
+                  .from("users")
+                  .select("IDUser")
+                  .eq("mail", userEmail)
+                  .maybeSingle();
+
+                if (existingUser?.IDUser) {
+                  targetUserId = existingUser.IDUser;
+                } else {
+                  targetUserId = crypto.randomUUID();
+                }
+              }
+            }
+          } catch (authErr) {
+            console.warn(`Auth signup fetch failed for ${userEmail}:`, authErr);
+            if (!targetUserId) targetUserId = crypto.randomUUID();
+          }
         }
 
-        processedInDb = true;
+        if (targetUserId) {
+          processedUserIds.push(targetUserId);
+
+          // Upsert in public.users table linked to IDEmpresa
+          const { error: userErr } = await supabase
+            .from("users")
+            .upsert({
+              IDUser: targetUserId,
+              name: userName,
+              mail: userEmail,
+              isAdmin: true,
+              superAdmin: false,
+              Rol: "Administrador",
+              phone: phoneVal,
+              IDEmpresa: companyIdToUse.trim(),
+              foto: null,
+              Sucursales: []
+            }, { onConflict: "IDUser" });
+
+          if (userErr) {
+            console.warn(`Failed upserting user ${userEmail} in public.users:`, userErr.message);
+          }
+        }
       }
+
+      // If editing company, unbind any existing admin users that were removed in the form
+      if (editingCompany && processedUserIds.length > 0) {
+        try {
+          const { data: currentDbUsers } = await supabase
+            .from("users")
+            .select("IDUser")
+            .eq("IDEmpresa", companyIdToUse);
+
+          if (currentDbUsers && currentDbUsers.length > 0) {
+            const usersToUnlink = currentDbUsers
+              .map((u: any) => u.IDUser)
+              .filter((uid: string) => !processedUserIds.includes(uid));
+
+            for (const unlinkId of usersToUnlink) {
+              await supabase
+                .from("users")
+                .update({ IDEmpresa: null, isAdmin: false })
+                .eq("IDUser", unlinkId);
+            }
+          }
+        } catch (unlinkErr) {
+          console.warn("Error unlinking removed users:", unlinkErr);
+        }
+      }
+
+      // Step 3: Automatically ensure unique row in personalizacion_web for this company
+      try {
+        // Consultar sucursales existentes para activarlas automáticamente si existen
+        let activeBranchIds: string[] = [];
+        try {
+          const { data: compBranches } = await supabase
+            .from("Sucursales")
+            .select("id")
+            .eq("IDEmpresa", companyIdToUse.trim());
+          if (compBranches && compBranches.length > 0) {
+            activeBranchIds = compBranches.map((b: any) => String(b.id));
+          }
+        } catch (bErr) {
+          console.warn("Could not query branches for web customization:", bErr);
+        }
+
+        const { data: existingWebConfig } = await supabase
+          .from("personalizacion_web")
+          .select("id, logo")
+          .eq("ID_Empresa", companyIdToUse.trim())
+          .maybeSingle();
+
+        const defaultWebData = {
+          ID_Empresa: companyIdToUse.trim(),
+          logo: uploadedLogoUrl || "",
+          portada: "",
+          orden_web: ["hero", "sucursales", "productos", "galeria", "contacto"],
+          sucursales_activas: activeBranchIds,
+          numero_whatsapp: cleanedPhones[0] ? Number(cleanedPhones[0].replace(/\D/g, '')) : null,
+          correo_general_info: primaryEmail || "",
+          color_texto: "#0f172a", // Negro (#0f172a)
+          color_titulos: "#F7340C", // Rojo (#F7340C)
+          color_fondo: "#ffffff", // Blanco (#ffffff)
+          galeria_fotos: [],
+          instagram: "",
+          facebook: "",
+          tiktok: "",
+          meta_titulo: newCompName.trim(),
+          meta_descripcion: newCompDesc.trim() || "Pide tus platillos y productos favoritos directamente a domicilio o con recogida en sucursal."
+        };
+
+        if (!existingWebConfig) {
+          const { error: insertPwErr } = await supabase
+            .from("personalizacion_web")
+            .insert(defaultWebData);
+
+          if (insertPwErr) {
+            console.error("Auto-creation of personalizacion_web row failed:", insertPwErr);
+          }
+        } else if (uploadedLogoUrl && (!existingWebConfig.logo || existingWebConfig.logo === "")) {
+          await supabase
+            .from("personalizacion_web")
+            .update({ logo: uploadedLogoUrl })
+            .eq("id", existingWebConfig.id);
+        }
+      } catch (pwErr) {
+        console.warn("Auto-creation of personalizacion_web row note:", pwErr);
+      }
+
+      processedInDb = true;
     } catch (err: any) {
       console.warn("Offline/error saving company to database, saving local fallback:", err);
     }
@@ -2805,20 +3735,23 @@ export default function Dashboard() {
         localCompanies.push(companyData);
         localStorage.setItem("reparto_local_companies", JSON.stringify(localCompanies));
 
-        // Save local backup for first admin
+        // Save local backup for admin users
         const localUsers = JSON.parse(localStorage.getItem("reparto_local_users") || "[]");
         const phoneVal = cleanedPhones[0] ? Number(cleanedPhones[0].replace(/\D/g, '')) : null;
-        localUsers.push({
-          IDUser: firstAdminId,
-          name: newCompOwner.trim(),
-          mail: newCompEmail.trim().toLowerCase(),
-          password: newCompPassword.trim(),
-          isAdmin: true,
-          superAdmin: false,
-          Rol: "Administrador",
-          phone: phoneVal,
-          IDEmpresa: companyIdToUse.trim()
-        });
+        for (let idx = 0; idx < validUsers.length; idx++) {
+          const u = validUsers[idx];
+          localUsers.push({
+            IDUser: processedUserIds[idx] || crypto.randomUUID(),
+            name: (u.name || newCompOwner).trim(),
+            mail: u.email.trim().toLowerCase(),
+            password: u.password?.trim() || "",
+            isAdmin: true,
+            superAdmin: false,
+            Rol: "Administrador",
+            phone: phoneVal,
+            IDEmpresa: companyIdToUse.trim()
+          });
+        }
         localStorage.setItem("reparto_local_users", JSON.stringify(localUsers));
       }
     } catch (e) {
@@ -2827,8 +3760,8 @@ export default function Dashboard() {
 
     setCompMessage(
       editingCompany
-        ? (processedInDb ? "¡Empresa actualizada con éxito en la base de datos Supabase!" : "Empresa actualizada localmente.")
-        : (processedInDb ? "¡Empresa y primer usuario administrador creados con éxito!" : "Empresa y primer administrador creados localmente.")
+        ? (processedInDb ? "¡Empresa y usuarios administradores actualizados con éxito!" : "Empresa actualizada localmente.")
+        : (processedInDb ? "¡Empresa y usuarios administradores creados con éxito!" : "Empresa y administradores creados localmente.")
     );
 
     resetCompanyForm();
@@ -2945,6 +3878,355 @@ export default function Dashboard() {
     setTimeout(() => {
       setPayMessage("");
     }, 5000);
+  };
+
+  // ========== WEB CUSTOMIZATION FUNCTIONS (personalizacion_web) ==========
+  const MAX_LOGO_BYTES = 250 * 1024 * 1024; // 250 MB
+  const MAX_IMAGE_BYTES = 350 * 1024 * 1024; // 350 MB
+
+  const loadWebCustomization = async () => {
+    if (!currentCompanyId) return;
+    setWebIsLoading(true);
+    setWebError("");
+    setWebMessage("");
+
+    try {
+      // 1. Fetch company data from Empresa as fallback defaults
+      const { data: compData } = await supabase
+        .from("Empresa")
+        .select("NombreEmpresa, DescripcionEmpresa, logoEmpresa, foto_empresa, mailEmpresa, TelefonosEmpresa")
+        .eq("idEmpresa", currentCompanyId)
+        .maybeSingle();
+
+      const fallbackLogo = compData?.logoEmpresa || compData?.foto_empresa || "";
+      const fallbackMail = compData?.mailEmpresa || "";
+      const fallbackPhone = compData?.TelefonosEmpresa?.[0]
+        ? String(compData.TelefonosEmpresa[0]).replace(/\D/g, "")
+        : "";
+      const fallbackTitulo = compData?.NombreEmpresa || "Menú Digital y Pedidos";
+      const fallbackDesc = compData?.DescripcionEmpresa || "Pide tus productos favoritos directamente a domicilio o con recogida en sucursal.";
+
+      // 2. Fetch row from personalizacion_web
+      const { data, error } = await supabase
+        .from("personalizacion_web")
+        .select("*")
+        .eq("ID_Empresa", currentCompanyId)
+        .maybeSingle();
+
+      if (!error && data) {
+        setWebRowId(data.id);
+        setWebLogo(data.logo || fallbackLogo);
+        setWebPortada(data.portada || "");
+        setWebGaleria(Array.isArray(data.galeria_fotos) ? data.galeria_fotos : []);
+        setWebColorTexto(data.color_texto || "#0f172a");
+        setWebColorTitulos(data.color_titulos || "#F7340C");
+        setWebColorFondo(data.color_fondo || "#ffffff");
+        setWebNumeroWhatsapp(
+          data.numero_whatsapp !== null && data.numero_whatsapp !== undefined
+            ? String(data.numero_whatsapp)
+            : fallbackPhone
+        );
+        setWebCorreoGeneral(data.correo_general_info || fallbackMail);
+        setWebInstagram(data.instagram || "");
+        setWebFacebook(data.facebook || "");
+        setWebTiktok(data.tiktok || "");
+        setWebMetaTitulo(data.meta_titulo || fallbackTitulo);
+        setWebMetaDescripcion(data.meta_descripcion || fallbackDesc);
+        setWebOrdenWeb(
+          Array.isArray(data.orden_web) && data.orden_web.length > 0
+            ? data.orden_web
+            : ["hero", "sucursales", "productos", "galeria", "contacto"]
+        );
+        setWebSucursalesActivas(
+          Array.isArray(data.sucursales_activas)
+            ? data.sucursales_activas
+            : branches.map(b => b.id)
+        );
+        setWebConfigLoaded(true);
+      } else {
+        // Automatically create unique default row in personalizacion_web for this company
+        const defaultBranchIds = branches.map(b => b.id);
+        const defaultWebData = {
+          ID_Empresa: currentCompanyId,
+          logo: fallbackLogo,
+          portada: "",
+          orden_web: ["hero", "sucursales", "productos", "galeria", "contacto"],
+          sucursales_activas: defaultBranchIds,
+          numero_whatsapp: fallbackPhone ? Number(fallbackPhone) : null,
+          correo_general_info: fallbackMail,
+          color_texto: "#0f172a",
+          color_titulos: "#F7340C",
+          color_fondo: "#ffffff",
+          galeria_fotos: [],
+          instagram: "",
+          facebook: "",
+          tiktok: "",
+          meta_titulo: fallbackTitulo,
+          meta_descripcion: fallbackDesc
+        };
+
+        const { data: newRow } = await supabase
+          .from("personalizacion_web")
+          .insert(defaultWebData)
+          .select("id")
+          .maybeSingle();
+
+        if (newRow?.id) {
+          setWebRowId(newRow.id);
+        }
+        setWebLogo(fallbackLogo);
+        setWebPortada("");
+        setWebGaleria([]);
+        setWebColorTexto("#0f172a");
+        setWebColorTitulos("#F7340C");
+        setWebColorFondo("#ffffff");
+        setWebNumeroWhatsapp(fallbackPhone);
+        setWebCorreoGeneral(fallbackMail);
+        setWebInstagram("");
+        setWebFacebook("");
+        setWebTiktok("");
+        setWebMetaTitulo(fallbackTitulo);
+        setWebMetaDescripcion(fallbackDesc);
+        setWebOrdenWeb(["hero", "sucursales", "productos", "galeria", "contacto"]);
+        setWebSucursalesActivas(defaultBranchIds);
+        setWebConfigLoaded(true);
+      }
+    } catch (err: any) {
+      console.error("Error loading web customization:", err);
+      setWebError("No se pudo cargar la configuración de la web.");
+    } finally {
+      setWebIsLoading(false);
+    }
+  };
+
+  const handleWebLogoUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    if (file.size > MAX_LOGO_BYTES) {
+      setWebError(`El logotipo seleccionado pesa ${(file.size / (1024 * 1024)).toFixed(1)} MB y supera el límite de 250 MB.`);
+      return;
+    }
+
+    setWebLogoUploading(true);
+    setWebError("");
+    setWebMessage("");
+
+    try {
+      const fileExt = file.name.split('.').pop() || "png";
+      const fileName = `personalizacion_web/${currentCompanyId}_logo_${Date.now()}.${fileExt}`;
+      const { data, error } = await supabase.storage
+        .from("general")
+        .upload(fileName, file, { upsert: true, cacheControl: "3600" });
+
+      if (error) throw error;
+
+      if (data) {
+        const { data: urlData } = supabase.storage.from("general").getPublicUrl(fileName);
+        setWebLogo(urlData.publicUrl);
+        setWebMessage("Logotipo subido correctamente al bucket.");
+      }
+    } catch (err: any) {
+      console.error("Error uploading logo:", err);
+      setWebError(`Error al subir el logo: ${err.message || err}`);
+    } finally {
+      setWebLogoUploading(false);
+    }
+  };
+
+  const handleWebPortadaUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    if (file.size > MAX_IMAGE_BYTES) {
+      setWebError(`La portada seleccionada pesa ${(file.size / (1024 * 1024)).toFixed(1)} MB y supera el límite de 350 MB.`);
+      return;
+    }
+
+    setWebPortadaUploading(true);
+    setWebError("");
+    setWebMessage("");
+
+    try {
+      const fileExt = file.name.split('.').pop() || "png";
+      const fileName = `personalizacion_web/${currentCompanyId}_portada_${Date.now()}.${fileExt}`;
+      const { data, error } = await supabase.storage
+        .from("general")
+        .upload(fileName, file, { upsert: true, cacheControl: "3600" });
+
+      if (error) throw error;
+
+      if (data) {
+        const { data: urlData } = supabase.storage.from("general").getPublicUrl(fileName);
+        setWebPortada(urlData.publicUrl);
+        setWebMessage("Portada subida correctamente al bucket.");
+      }
+    } catch (err: any) {
+      console.error("Error uploading portada:", err);
+      setWebError(`Error al subir la portada: ${err.message || err}`);
+    } finally {
+      setWebPortadaUploading(false);
+    }
+  };
+
+  const handleWebGaleriaUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (!files || files.length === 0) return;
+
+    setWebGaleriaUploading(true);
+    setWebError("");
+    setWebMessage("");
+
+    const uploadedUrls: string[] = [];
+    const skippedFiles: string[] = [];
+
+    try {
+      for (let i = 0; i < files.length; i++) {
+        const file = files[i];
+        if (file.size > MAX_IMAGE_BYTES) {
+          skippedFiles.push(file.name);
+          continue;
+        }
+
+        const fileExt = file.name.split('.').pop() || "jpg";
+        const fileName = `personalizacion_web/${currentCompanyId}_galeria_${Date.now()}_${i}.${fileExt}`;
+        const { data, error } = await supabase.storage
+          .from("general")
+          .upload(fileName, file, { upsert: true, cacheControl: "3600" });
+
+        if (!error && data) {
+          const { data: urlData } = supabase.storage.from("general").getPublicUrl(fileName);
+          uploadedUrls.push(urlData.publicUrl);
+        }
+      }
+
+      if (uploadedUrls.length > 0) {
+        setWebGaleria(prev => [...prev, ...uploadedUrls]);
+        setWebMessage(`Se agregaron ${uploadedUrls.length} imagen(es) a la galería.`);
+      }
+
+      if (skippedFiles.length > 0) {
+        setWebError(`${skippedFiles.length} imagen(es) superaron el límite de 350 MB y no se subieron.`);
+      }
+    } catch (err: any) {
+      console.error("Error uploading galeria images:", err);
+      setWebError(`Error al subir fotos a la galería: ${err.message || err}`);
+    } finally {
+      setWebGaleriaUploading(false);
+    }
+  };
+
+  const handleRemoveWebGaleriaPhoto = (indexToRemove: number) => {
+    setWebGaleria(prev => prev.filter((_, idx) => idx !== indexToRemove));
+  };
+
+  const handleToggleWebSucursal = (branchId: string) => {
+    setWebSucursalesActivas(prev => {
+      if (prev.includes(branchId)) {
+        return prev.filter(id => id !== branchId);
+      } else {
+        return [...prev, branchId];
+      }
+    });
+  };
+
+  const handleMoveWebSection = (index: number, direction: "up" | "down") => {
+    if (direction === "up" && index > 0) {
+      setWebOrdenWeb(prev => {
+        const copy = [...prev];
+        const temp = copy[index - 1];
+        copy[index - 1] = copy[index];
+        copy[index] = temp;
+        return copy;
+      });
+    } else if (direction === "down" && index < webOrdenWeb.length - 1) {
+      setWebOrdenWeb(prev => {
+        const copy = [...prev];
+        const temp = copy[index + 1];
+        copy[index + 1] = copy[index];
+        copy[index] = temp;
+        return copy;
+      });
+    }
+  };
+
+  const handleSaveWebCustomization = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    if (!currentCompanyId) {
+      setWebError("No se ha seleccionado ninguna empresa activa.");
+      return;
+    }
+
+    setWebIsSaving(true);
+    setWebError("");
+    setWebMessage("");
+
+    try {
+      const phoneClean = webNumeroWhatsapp ? Number(String(webNumeroWhatsapp).replace(/\D/g, "")) : null;
+
+      const payload = {
+        ID_Empresa: currentCompanyId.trim(),
+        logo: webLogo || "",
+        portada: webPortada || "",
+        orden_web: webOrdenWeb,
+        sucursales_activas: webSucursalesActivas,
+        numero_whatsapp: phoneClean,
+        correo_general_info: webCorreoGeneral.trim(),
+        color_texto: webColorTexto.trim() || "#0f172a",
+        color_titulos: webColorTitulos.trim() || "#F7340C",
+        color_fondo: webColorFondo.trim() || "#ffffff",
+        galeria_fotos: webGaleria,
+        instagram: webInstagram.trim(),
+        facebook: webFacebook.trim(),
+        tiktok: webTiktok.trim(),
+        meta_titulo: webMetaTitulo.trim(),
+        meta_descripcion: webMetaDescripcion.trim()
+      };
+
+      if (webRowId) {
+        const { error: updateErr } = await supabase
+          .from("personalizacion_web")
+          .update(payload)
+          .eq("id", webRowId);
+
+        if (updateErr) throw updateErr;
+      } else {
+        // Query to check if a row already exists for ID_Empresa to maintain uniqueness
+        const { data: existing } = await supabase
+          .from("personalizacion_web")
+          .select("id")
+          .eq("ID_Empresa", currentCompanyId)
+          .maybeSingle();
+
+        if (existing?.id) {
+          setWebRowId(existing.id);
+          const { error: updateErr } = await supabase
+            .from("personalizacion_web")
+            .update(payload)
+            .eq("id", existing.id);
+          if (updateErr) throw updateErr;
+        } else {
+          const { data: newRow, error: insertErr } = await supabase
+            .from("personalizacion_web")
+            .insert(payload)
+            .select("id")
+            .single();
+
+          if (insertErr) throw insertErr;
+          if (newRow?.id) setWebRowId(newRow.id);
+        }
+      }
+
+      setWebMessage("¡Personalización de la landing page guardada con éxito!");
+      setTimeout(() => {
+        setWebMessage("");
+      }, 5000);
+    } catch (err: any) {
+      console.error("Error saving web customization:", err);
+      setWebError(err.message || "Error al guardar la personalización de la web.");
+    } finally {
+      setWebIsSaving(false);
+    }
   };
 
 
@@ -3732,7 +5014,7 @@ export default function Dashboard() {
                                     background: 'rgba(99, 102, 241, 0.08)',
                                     border: '1px solid rgba(99, 102, 241, 0.2)',
                                     borderRadius: '8px',
-                                    color: '#818cf8',
+                                    color: 'var(--primary)',
                                     fontSize: '0.8rem',
                                     lineHeight: '1.4'
                                   }}>
@@ -4325,7 +5607,7 @@ export default function Dashboard() {
                         disabled={staffIsLoading}
                       />
                       {newStaffPhoto && (
-                        <div style={{ marginTop: "6px", display: "flex", alignItems: "center", gap: "10px", padding: "6px 12px", background: "var(--success-glow)", borderRadius: "var(--radius-sm)", border: "1px solid rgba(5, 150, 105, 0.15)" }}>
+                        <div style={{ marginTop: "6px", display: "flex", alignItems: "center", gap: "10px", padding: "6px 12px", background: "var(--success-glow)", borderRadius: "var(--radius-sm)", border: "1px solid rgba(247, 52, 12, 0.2)" }}>
                           <img 
                             src={newStaffPhoto} 
                             alt="Avatar Vista previa" 
@@ -4663,7 +5945,7 @@ export default function Dashboard() {
                         disabled={saIsLoading}
                       />
                       {newSaPhoto && (
-                        <div style={{ marginTop: "6px", display: "flex", alignItems: "center", gap: "10px", padding: "6px 12px", background: "var(--success-glow)", borderRadius: "var(--radius-sm)", border: "1px solid rgba(5, 150, 105, 0.15)" }}>
+                        <div style={{ marginTop: "6px", display: "flex", alignItems: "center", gap: "10px", padding: "6px 12px", background: "var(--success-glow)", borderRadius: "var(--radius-sm)", border: "1px solid rgba(247, 52, 12, 0.2)" }}>
                           <img 
                             src={newSaPhoto} 
                             alt="Avatar Vista previa" 
@@ -5081,6 +6363,724 @@ export default function Dashboard() {
                     </tbody>
                   </table>
                 </div>
+              </div>
+
+            </div>
+          )}
+
+          {/* TAB: WEB CUSTOMIZATION (PERSONALIZACIÓN DE WEB) */}
+          {activeTab === "web-customization" && (
+            <div style={{ display: "flex", flexDirection: "column", gap: "24px" }}>
+              {/* Header Panel */}
+              <div className="glass-panel" style={{ padding: "24px", borderRadius: "var(--radius-lg)", display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: "16px" }}>
+                <div>
+                  <h3 className={styles.sectionTitle} style={{ fontSize: "1.3rem", display: "flex", alignItems: "center", gap: "10px", margin: 0 }}>
+                    <Globe size={24} style={{ color: "var(--primary)" }} /> Personalización de Web y Landing Page
+                  </h3>
+                  <p style={{ fontSize: "0.82rem", color: "var(--text-muted)", marginTop: "4px", marginBottom: 0 }}>
+                    Configura la identidad de marca, logotipos, colores (RGB), secciones, sucursales y redes de tu sitio web único.
+                  </p>
+                </div>
+                <div style={{ display: "flex", gap: "12px", alignItems: "center" }}>
+                  <button
+                    type="button"
+                    onClick={() => handleSaveWebCustomization()}
+                    disabled={webIsSaving || webIsLoading}
+                    className={styles.formBtn}
+                    style={{ margin: 0, padding: "10px 24px", display: "flex", alignItems: "center", gap: "8px", width: "auto" }}
+                  >
+                    <Save size={16} /> {webIsSaving ? "Guardando..." : "Guardar Cambios"}
+                  </button>
+                </div>
+              </div>
+
+              {/* Status Alerts */}
+              {webError && (
+                <div style={{ color: "var(--danger)", fontSize: "0.85rem", padding: "14px 18px", background: "var(--danger-glow)", borderRadius: "var(--radius-md)", borderLeft: "4px solid var(--danger)" }}>
+                  {webError}
+                </div>
+              )}
+              {webMessage && (
+                <div style={{ color: "var(--success)", fontSize: "0.85rem", padding: "14px 18px", background: "var(--success-glow)", borderRadius: "var(--radius-md)", borderLeft: "4px solid var(--success)", fontWeight: 500 }}>
+                  {webMessage}
+                </div>
+              )}
+
+              {/* Master Form Grid 1: Visual Media & Colors */}
+              <div style={{ display: "grid", gridTemplateColumns: "1.1fr 1fr", gap: "24px" }}>
+                
+                {/* Left Column: Logo, Portada & Galería */}
+                <div style={{ display: "flex", flexDirection: "column", gap: "20px" }}>
+                  
+                  {/* Card: Logo de la Web */}
+                  <div className="glass-panel" style={{ padding: "20px", borderRadius: "var(--radius-lg)" }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "12px" }}>
+                      <h4 className={styles.inputLabel} style={{ margin: 0, fontSize: "0.95rem" }}>Logotipo Oficial (Máx 250 MB)</h4>
+                      <span style={{ fontSize: "0.7rem", color: "var(--text-muted)" }}>Proporción cuadrada 1:1</span>
+                    </div>
+
+                    <div style={{
+                      border: "2px dashed var(--border-color)",
+                      borderRadius: "var(--radius-md)",
+                      padding: "16px",
+                      textAlign: "center",
+                      background: "rgba(0,0,0,0.02)",
+                      display: "flex",
+                      flexDirection: "column",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      minHeight: "140px"
+                    }}>
+                      {webLogo ? (
+                        <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: "12px" }}>
+                          <img 
+                            src={webLogo} 
+                            alt="Logo Web" 
+                            style={{ width: "100px", height: "100px", borderRadius: "var(--radius-md)", objectFit: "cover", border: "1px solid var(--border-color)" }} 
+                          />
+                          <div style={{ display: "flex", gap: "10px" }}>
+                            <label style={{ cursor: "pointer", fontSize: "0.75rem", color: "var(--primary)", background: "var(--primary-glow)", border: "1px solid rgba(247, 52, 12, 0.2)", borderRadius: "var(--radius-sm)", padding: "4px 10px" }}>
+                              Cambiar Logo
+                              <input type="file" accept="image/*" onChange={handleWebLogoUpload} style={{ display: "none" }} disabled={webLogoUploading} />
+                            </label>
+                            <button
+                              type="button"
+                              onClick={() => setWebLogo("")}
+                              style={{ fontSize: "0.75rem", color: "var(--danger)", background: "rgba(239, 68, 68, 0.08)", border: "1px solid rgba(239, 68, 68, 0.2)", borderRadius: "var(--radius-sm)", padding: "4px 10px", cursor: "pointer" }}
+                            >
+                              Remover
+                            </button>
+                          </div>
+                        </div>
+                      ) : (
+                        <label style={{ cursor: "pointer", width: "100%", display: "flex", flexDirection: "column", alignItems: "center", gap: "8px" }}>
+                          <Upload size={28} style={{ color: "var(--text-muted)" }} />
+                          <span style={{ fontSize: "0.82rem", color: "var(--text-secondary)", fontWeight: 500 }}>
+                            {webLogoUploading ? "Subiendo al bucket..." : "Subir logo de la web"}
+                          </span>
+                          <span style={{ fontSize: "0.7rem", color: "var(--text-muted)" }}>
+                            Límite: hasta 250 MB. PNG, JPG, SVG o WEBP.
+                          </span>
+                          <input type="file" accept="image/*" onChange={handleWebLogoUpload} style={{ display: "none" }} disabled={webLogoUploading} />
+                        </label>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Card: Portada / Banner */}
+                  <div className="glass-panel" style={{ padding: "20px", borderRadius: "var(--radius-lg)" }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "12px" }}>
+                      <h4 className={styles.inputLabel} style={{ margin: 0, fontSize: "0.95rem" }}>Portada / Banner Principal (Máx 350 MB)</h4>
+                      <span style={{ fontSize: "0.7rem", color: "var(--text-muted)" }}>Panorámica 16:9 / 21:9</span>
+                    </div>
+
+                    <div style={{
+                      border: "2px dashed var(--border-color)",
+                      borderRadius: "var(--radius-md)",
+                      padding: "16px",
+                      textAlign: "center",
+                      background: "rgba(0,0,0,0.02)",
+                      display: "flex",
+                      flexDirection: "column",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      minHeight: "150px"
+                    }}>
+                      {webPortada ? (
+                        <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: "12px", width: "100%" }}>
+                          <img 
+                            src={webPortada} 
+                            alt="Portada Web" 
+                            style={{ width: "100%", height: "130px", borderRadius: "var(--radius-md)", objectFit: "cover", border: "1px solid var(--border-color)" }} 
+                          />
+                          <div style={{ display: "flex", gap: "10px" }}>
+                            <label style={{ cursor: "pointer", fontSize: "0.75rem", color: "var(--primary)", background: "var(--primary-glow)", border: "1px solid rgba(247, 52, 12, 0.2)", borderRadius: "var(--radius-sm)", padding: "4px 10px" }}>
+                              Cambiar Portada
+                              <input type="file" accept="image/*" onChange={handleWebPortadaUpload} style={{ display: "none" }} disabled={webPortadaUploading} />
+                            </label>
+                            <button
+                              type="button"
+                              onClick={() => setWebPortada("")}
+                              style={{ fontSize: "0.75rem", color: "var(--danger)", background: "rgba(239, 68, 68, 0.08)", border: "1px solid rgba(239, 68, 68, 0.2)", borderRadius: "var(--radius-sm)", padding: "4px 10px", cursor: "pointer" }}
+                            >
+                              Remover
+                            </button>
+                          </div>
+                        </div>
+                      ) : (
+                        <label style={{ cursor: "pointer", width: "100%", display: "flex", flexDirection: "column", alignItems: "center", gap: "8px" }}>
+                          <Camera size={28} style={{ color: "var(--text-muted)" }} />
+                          <span style={{ fontSize: "0.82rem", color: "var(--text-secondary)", fontWeight: 500 }}>
+                            {webPortadaUploading ? "Subiendo portada al bucket..." : "Subir imagen de portada / banner"}
+                          </span>
+                          <span style={{ fontSize: "0.7rem", color: "var(--text-muted)" }}>
+                            Límite: hasta 350 MB. Formato horizontal recomendado.
+                          </span>
+                          <input type="file" accept="image/*" onChange={handleWebPortadaUpload} style={{ display: "none" }} disabled={webPortadaUploading} />
+                        </label>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Card: Galería de Fotos */}
+                  <div className="glass-panel" style={{ padding: "20px", borderRadius: "var(--radius-lg)" }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "12px", flexWrap: "wrap", gap: "8px" }}>
+                      <div>
+                        <h4 className={styles.inputLabel} style={{ margin: 0, fontSize: "0.95rem" }}>Galería de Fotos ({webGaleria.length})</h4>
+                        <span style={{ fontSize: "0.7rem", color: "var(--text-muted)" }}>Máximo 350 MB por imagen</span>
+                      </div>
+                      <label style={{
+                        background: "var(--primary-glow)",
+                        border: "1px solid rgba(247, 52, 12, 0.2)",
+                        color: "var(--primary)",
+                        padding: "4px 10px",
+                        borderRadius: "var(--radius-sm)",
+                        fontSize: "0.72rem",
+                        fontWeight: 600,
+                        cursor: "pointer",
+                        display: "flex",
+                        alignItems: "center",
+                        gap: "4px"
+                      }}>
+                        <Plus size={12} /> {webGaleriaUploading ? "Subiendo..." : "Agregar Fotos"}
+                        <input type="file" accept="image/*" multiple onChange={handleWebGaleriaUpload} style={{ display: "none" }} disabled={webGaleriaUploading} />
+                      </label>
+                    </div>
+
+                    {webGaleria.length > 0 ? (
+                      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(80px, 1fr))", gap: "10px", maxHeight: "260px", overflowY: "auto", padding: "4px" }}>
+                        {webGaleria.map((photoUrl, idx) => (
+                          <div key={idx} style={{ position: "relative", width: "100%", height: "80px", borderRadius: "var(--radius-sm)", overflow: "hidden", border: "1px solid var(--border-color)" }}>
+                            <img src={photoUrl} alt={`Foto ${idx + 1}`} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+                            <button
+                              type="button"
+                              onClick={() => handleRemoveWebGaleriaPhoto(idx)}
+                              title="Eliminar foto"
+                              style={{
+                                position: "absolute",
+                                top: "4px",
+                                right: "4px",
+                                background: "rgba(0,0,0,0.65)",
+                                color: "#ef4444",
+                                border: "none",
+                                borderRadius: "50%",
+                                width: "22px",
+                                height: "22px",
+                                display: "flex",
+                                alignItems: "center",
+                                justifyContent: "center",
+                                cursor: "pointer"
+                              }}
+                            >
+                              <Trash2 size={12} />
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <div style={{ textAlign: "center", padding: "20px", color: "var(--text-muted)", fontSize: "0.78rem", border: "1px dashed var(--border-color)", borderRadius: "var(--radius-md)" }}>
+                        No hay fotografías en la galería aún. Haz clic en "Agregar Fotos" para mostrar tus productos o instalaciones.
+                      </div>
+                    )}
+                  </div>
+
+                </div>
+
+                {/* Right Column: Colors, Live Preview & Contact */}
+                <div style={{ display: "flex", flexDirection: "column", gap: "20px" }}>
+                  
+                  {/* Card: Paleta de Colores RGB/HEX */}
+                  <div className="glass-panel" style={{ padding: "20px", borderRadius: "var(--radius-lg)" }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "14px" }}>
+                      <div>
+                        <h4 className={styles.inputLabel} style={{ margin: 0, fontSize: "0.95rem", display: "flex", alignItems: "center", gap: "8px" }}>
+                          <Palette size={16} style={{ color: "var(--primary)" }} /> Paleta de Colores (RGB / HEX)
+                        </h4>
+                        <span style={{ fontSize: "0.7rem", color: "var(--text-muted)" }}>Personaliza los tonos de fondo, títulos y texto</span>
+                      </div>
+                    </div>
+
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "12px", marginBottom: "16px" }}>
+                      {/* Color de Fondo */}
+                      <div className={styles.formGroup} style={{ margin: 0 }}>
+                        <label style={{ fontSize: "0.72rem", color: "var(--text-secondary)", fontWeight: 600, marginBottom: "6px", display: "block" }}>
+                          Color de Fondo
+                        </label>
+                        <div style={{ display: "flex", gap: "6px", alignItems: "center" }}>
+                          <input 
+                            type="color" 
+                            value={webColorFondo} 
+                            onChange={(e) => setWebColorFondo(e.target.value)}
+                            style={{ width: "36px", height: "36px", borderRadius: "var(--radius-sm)", border: "1px solid var(--border-color)", cursor: "pointer", padding: "2px", background: "none" }}
+                          />
+                          <input 
+                            type="text" 
+                            value={webColorFondo} 
+                            onChange={(e) => setWebColorFondo(e.target.value)}
+                            className={styles.formInput}
+                            style={{ padding: "6px 8px", fontSize: "0.8rem", fontFamily: "var(--font-mono)" }}
+                          />
+                        </div>
+                      </div>
+
+                      {/* Color de Títulos */}
+                      <div className={styles.formGroup} style={{ margin: 0 }}>
+                        <label style={{ fontSize: "0.72rem", color: "var(--text-secondary)", fontWeight: 600, marginBottom: "6px", display: "block" }}>
+                          Color de Títulos
+                        </label>
+                        <div style={{ display: "flex", gap: "6px", alignItems: "center" }}>
+                          <input 
+                            type="color" 
+                            value={webColorTitulos} 
+                            onChange={(e) => setWebColorTitulos(e.target.value)}
+                            style={{ width: "36px", height: "36px", borderRadius: "var(--radius-sm)", border: "1px solid var(--border-color)", cursor: "pointer", padding: "2px", background: "none" }}
+                          />
+                          <input 
+                            type="text" 
+                            value={webColorTitulos} 
+                            onChange={(e) => setWebColorTitulos(e.target.value)}
+                            className={styles.formInput}
+                            style={{ padding: "6px 8px", fontSize: "0.8rem", fontFamily: "var(--font-mono)" }}
+                          />
+                        </div>
+                      </div>
+
+                      {/* Color de Texto */}
+                      <div className={styles.formGroup} style={{ margin: 0 }}>
+                        <label style={{ fontSize: "0.72rem", color: "var(--text-secondary)", fontWeight: 600, marginBottom: "6px", display: "block" }}>
+                          Color de Texto
+                        </label>
+                        <div style={{ display: "flex", gap: "6px", alignItems: "center" }}>
+                          <input 
+                            type="color" 
+                            value={webColorTexto} 
+                            onChange={(e) => setWebColorTexto(e.target.value)}
+                            style={{ width: "36px", height: "36px", borderRadius: "var(--radius-sm)", border: "1px solid var(--border-color)", cursor: "pointer", padding: "2px", background: "none" }}
+                          />
+                          <input 
+                            type="text" 
+                            value={webColorTexto} 
+                            onChange={(e) => setWebColorTexto(e.target.value)}
+                            className={styles.formInput}
+                            style={{ padding: "6px 8px", fontSize: "0.8rem", fontFamily: "var(--font-mono)" }}
+                          />
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Presets rápidos */}
+                    <div style={{ display: "flex", gap: "8px", alignItems: "center", marginBottom: "16px", flexWrap: "wrap" }}>
+                      <span style={{ fontSize: "0.7rem", color: "var(--text-muted)" }}>Presets rápidos:</span>
+                      <button
+                        type="button"
+                        onClick={() => { setWebColorFondo("#ffffff"); setWebColorTitulos("#F7340C"); setWebColorTexto("#0f172a"); }}
+                        style={{ fontSize: "0.68rem", padding: "3px 8px", borderRadius: "var(--radius-sm)", border: "1px solid var(--border-color)", background: "rgba(255,255,255,0.03)", color: "var(--text-secondary)", cursor: "pointer" }}
+                      >
+                        Blanco / Rojo Oficial
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => { setWebColorFondo("#0f172a"); setWebColorTitulos("#F7340C"); setWebColorTexto("#f8fafc"); }}
+                        style={{ fontSize: "0.68rem", padding: "3px 8px", borderRadius: "var(--radius-sm)", border: "1px solid var(--border-color)", background: "rgba(255,255,255,0.03)", color: "var(--text-secondary)", cursor: "pointer" }}
+                      >
+                        Oscuro Elegante
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => { setWebColorFondo("#ffffff"); setWebColorTitulos("#0f172a"); setWebColorTexto("#334155"); }}
+                        style={{ fontSize: "0.68rem", padding: "3px 8px", borderRadius: "var(--radius-sm)", border: "1px solid var(--border-color)", background: "rgba(255,255,255,0.03)", color: "var(--text-secondary)", cursor: "pointer" }}
+                      >
+                        Negro Clásico
+                      </button>
+                    </div>
+
+                    {/* Live Preview Widget */}
+                    <div style={{
+                      backgroundColor: webColorFondo,
+                      border: "1px solid var(--border-color)",
+                      borderRadius: "var(--radius-md)",
+                      padding: "16px",
+                      transition: "all 0.2s ease"
+                    }}>
+                      <div style={{ fontSize: "0.7rem", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.05em", color: webColorTitulos, marginBottom: "4px" }}>
+                        Previsualización en Vivo de la Web
+                      </div>
+                      <h3 style={{ margin: "0 0 6px 0", fontSize: "1.1rem", fontWeight: 700, color: webColorTitulos }}>
+                        Bienvenido a Nuestro Menú Digital
+                      </h3>
+                      <p style={{ margin: "0 0 12px 0", fontSize: "0.8rem", color: webColorTexto, lineHeight: "1.4" }}>
+                        Pide tus alimentos y productos favoritos directamente a domicilio o con recogida en sucursal.
+                      </p>
+                      <div style={{ display: "flex", gap: "8px" }}>
+                        <div style={{
+                          background: webColorTitulos,
+                          color: webColorFondo,
+                          padding: "6px 14px",
+                          borderRadius: "var(--radius-sm)",
+                          fontSize: "0.75rem",
+                          fontWeight: 600,
+                          display: "inline-block"
+                        }}>
+                          Ver Productos
+                        </div>
+                        <div style={{
+                          background: "transparent",
+                          color: webColorTitulos,
+                          border: `1px solid ${webColorTitulos}`,
+                          padding: "6px 14px",
+                          borderRadius: "var(--radius-sm)",
+                          fontSize: "0.75rem",
+                          fontWeight: 600,
+                          display: "inline-block"
+                        }}>
+                          Nuestras Sucursales
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Card: Canales de Contacto y Redes Sociales */}
+                  <div className="glass-panel" style={{ padding: "20px", borderRadius: "var(--radius-lg)" }}>
+                    <h4 className={styles.inputLabel} style={{ marginBottom: "14px", fontSize: "0.95rem" }}>
+                      Contacto y Redes Sociales
+                    </h4>
+
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "12px" }}>
+                      <div className={styles.formGroup} style={{ margin: 0 }}>
+                        <label className={styles.inputLabel} style={{ fontSize: "0.72rem" }}>WhatsApp Oficial de Pedidos</label>
+                        <input
+                          type="tel"
+                          placeholder="Ej. 5512345678"
+                          value={webNumeroWhatsapp}
+                          onChange={(e) => setWebNumeroWhatsapp(e.target.value)}
+                          className={styles.formInput}
+                          style={{ padding: "8px 10px", fontSize: "0.82rem" }}
+                        />
+                      </div>
+
+                      <div className={styles.formGroup} style={{ margin: 0 }}>
+                        <label className={styles.inputLabel} style={{ fontSize: "0.72rem" }}>Correo General de Contacto</label>
+                        <input
+                          type="email"
+                          placeholder="contacto@tunegocio.com"
+                          value={webCorreoGeneral}
+                          onChange={(e) => setWebCorreoGeneral(e.target.value)}
+                          className={styles.formInput}
+                          style={{ padding: "8px 10px", fontSize: "0.82rem" }}
+                        />
+                      </div>
+
+                      <div className={styles.formGroup} style={{ margin: 0 }}>
+                        <label className={styles.inputLabel} style={{ fontSize: "0.72rem" }}>Instagram</label>
+                        <input
+                          type="text"
+                          placeholder="@tu_negocio o enlace"
+                          value={webInstagram}
+                          onChange={(e) => setWebInstagram(e.target.value)}
+                          className={styles.formInput}
+                          style={{ padding: "8px 10px", fontSize: "0.82rem" }}
+                        />
+                      </div>
+
+                      <div className={styles.formGroup} style={{ margin: 0 }}>
+                        <label className={styles.inputLabel} style={{ fontSize: "0.72rem" }}>Facebook</label>
+                        <input
+                          type="text"
+                          placeholder="facebook.com/tu_negocio"
+                          value={webFacebook}
+                          onChange={(e) => setWebFacebook(e.target.value)}
+                          className={styles.formInput}
+                          style={{ padding: "8px 10px", fontSize: "0.82rem" }}
+                        />
+                      </div>
+
+                      <div className={styles.formGroup} style={{ margin: 0, gridColumn: "span 2" }}>
+                        <label className={styles.inputLabel} style={{ fontSize: "0.72rem" }}>TikTok</label>
+                        <input
+                          type="text"
+                          placeholder="@tu_negocio o enlace"
+                          value={webTiktok}
+                          onChange={(e) => setWebTiktok(e.target.value)}
+                          className={styles.formInput}
+                          style={{ padding: "8px 10px", fontSize: "0.82rem" }}
+                        />
+                      </div>
+                    </div>
+                  </div>
+
+                </div>
+
+              </div>
+
+              {/* Card: SEO y Metadatos de la Web (Meta Título y Meta Descripción) */}
+              <div className="glass-panel" style={{ padding: "20px", borderRadius: "var(--radius-lg)" }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "14px", flexWrap: "wrap", gap: "8px" }}>
+                  <div>
+                    <h4 className={styles.inputLabel} style={{ margin: 0, fontSize: "0.95rem", display: "flex", alignItems: "center", gap: "8px" }}>
+                      <Globe size={18} style={{ color: "var(--primary)" }} /> SEO y Metadatos de la Landing Page
+                    </h4>
+                    <span style={{ fontSize: "0.72rem", color: "var(--text-muted)" }}>
+                      Personaliza el título y la descripción que aparecerán en Google, pestañas del navegador y al compartir en redes sociales (WhatsApp, Facebook, Instagram).
+                    </span>
+                  </div>
+                </div>
+
+                <div style={{ display: "grid", gridTemplateColumns: "1.2fr 1fr", gap: "20px" }}>
+                  {/* Inputs Column */}
+                  <div style={{ display: "flex", flexDirection: "column", gap: "14px" }}>
+                    <div className={styles.formGroup} style={{ margin: 0 }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "4px" }}>
+                        <label className={styles.inputLabel} style={{ fontSize: "0.76rem", margin: 0 }}>Meta Título (Pestaña / Buscadores)</label>
+                        <span style={{ fontSize: "0.68rem", color: webMetaTitulo.length > 60 ? "var(--danger)" : "var(--text-muted)", fontWeight: 500 }}>
+                          {webMetaTitulo.length}/60 car.
+                        </span>
+                      </div>
+                      <input
+                        type="text"
+                        placeholder="Ej. Pizzas San Juan | Las Mejores Pizzas Artesanales"
+                        value={webMetaTitulo}
+                        onChange={(e) => setWebMetaTitulo(e.target.value)}
+                        className={styles.formInput}
+                        style={{ padding: "9px 12px", fontSize: "0.85rem" }}
+                        maxLength={70}
+                      />
+                      <span style={{ fontSize: "0.68rem", color: "var(--text-muted)", marginTop: "2px" }}>
+                        Recomendado: entre 40 y 60 caracteres para una visualización completa en buscadores.
+                      </span>
+                    </div>
+
+                    <div className={styles.formGroup} style={{ margin: 0 }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "4px" }}>
+                        <label className={styles.inputLabel} style={{ fontSize: "0.76rem", margin: 0 }}>Meta Descripción (Resumen en Buscadores y Redes)</label>
+                        <span style={{ fontSize: "0.68rem", color: webMetaDescripcion.length > 160 ? "var(--danger)" : "var(--text-muted)", fontWeight: 500 }}>
+                          {webMetaDescripcion.length}/160 car.
+                        </span>
+                      </div>
+                      <textarea
+                        rows={3}
+                        placeholder="Ej. Ordena tus pizzas y platillos favoritos en línea. Menú digital actualizado, promociones exclusivas y servicio de entrega a domicilio rápido."
+                        value={webMetaDescripcion}
+                        onChange={(e) => setWebMetaDescripcion(e.target.value)}
+                        className={styles.formInput}
+                        style={{ padding: "9px 12px", fontSize: "0.82rem", resize: "vertical" }}
+                        maxLength={180}
+                      />
+                      <span style={{ fontSize: "0.68rem", color: "var(--text-muted)", marginTop: "2px" }}>
+                        Recomendado: entre 120 y 160 caracteres para evitar que Google corte el resumen.
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* Live Google Search Snippet Preview Column */}
+                  <div style={{
+                    background: "rgba(0, 0, 0, 0.02)",
+                    border: "1px solid var(--border-color)",
+                    borderRadius: "var(--radius-md)",
+                    padding: "16px",
+                    display: "flex",
+                    flexDirection: "column",
+                    justifyContent: "center",
+                    gap: "8px"
+                  }}>
+                    <div style={{ fontSize: "0.68rem", textTransform: "uppercase", letterSpacing: "0.06em", color: "var(--text-muted)", fontWeight: 700 }}>
+                      Previsualización en Google Search
+                    </div>
+                    <div style={{ background: "#ffffff", padding: "14px 16px", borderRadius: "8px", border: "1px solid #e2e8f0", boxShadow: "0 1px 3px rgba(0,0,0,0.04)" }}>
+                      <div style={{ fontSize: "0.75rem", color: "#202124", display: "flex", alignItems: "center", gap: "6px", marginBottom: "4px" }}>
+                        <span style={{ color: "#202124", fontWeight: 500 }}>reparto.mx</span>
+                        <span style={{ color: "#5f6368" }}>› {currentCompanyId || "tienda"}</span>
+                      </div>
+                      <div style={{ fontSize: "1rem", color: "#1a0dab", fontWeight: 500, lineHeight: "1.3", textDecoration: "underline", cursor: "pointer", marginBottom: "4px" }}>
+                        {webMetaTitulo.trim() || "Nombre de Tu Negocio | Menú y Pedidos Online"}
+                      </div>
+                      <div style={{ fontSize: "0.78rem", color: "#4d5156", lineHeight: "1.4" }}>
+                        {webMetaDescripcion.trim() || "Pide en línea a domicilio o para recoger. Explora nuestro menú digital con precios actualizados y promociones exclusivas."}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Master Form Grid 2: Sucursales Habilitadas & Orden de Secciones */}
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "24px" }}>
+                
+                {/* Card: Sucursales Habilitadas en la Web */}
+                <div className="glass-panel" style={{ padding: "20px", borderRadius: "var(--radius-lg)" }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "14px" }}>
+                    <div>
+                      <h4 className={styles.inputLabel} style={{ margin: 0, fontSize: "0.95rem" }}>
+                        Sucursales Habilitadas en Web ({webSucursalesActivas.length}/{branches.length})
+                      </h4>
+                      <span style={{ fontSize: "0.7rem", color: "var(--text-muted)" }}>Selecciona las sucursales visibles en la tienda online</span>
+                    </div>
+                  </div>
+
+                  <div style={{ display: "flex", flexDirection: "column", gap: "10px", maxHeight: "280px", overflowY: "auto" }}>
+                    {branches.map((b) => {
+                      const isActive = webSucursalesActivas.includes(b.id);
+                      return (
+                        <div
+                          key={b.id}
+                          onClick={() => handleToggleWebSucursal(b.id)}
+                          style={{
+                            display: "flex",
+                            alignItems: "center",
+                            justifyContent: "space-between",
+                            padding: "10px 14px",
+                            background: isActive ? "rgba(247, 52, 12, 0.05)" : "rgba(255, 255, 255, 0.02)",
+                            border: `1px solid ${isActive ? "rgba(247, 52, 12, 0.25)" : "var(--border-color)"}`,
+                            borderRadius: "var(--radius-md)",
+                            cursor: "pointer",
+                            transition: "all 0.15s ease"
+                          }}
+                        >
+                          <div>
+                            <div style={{ fontSize: "0.85rem", fontWeight: 600, color: "var(--text-primary)" }}>{b.name}</div>
+                            <div style={{ fontSize: "0.72rem", color: "var(--text-muted)" }}>{b.address || "Sin dirección"}</div>
+                          </div>
+                          <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                            <span style={{
+                              fontSize: "0.7rem",
+                              fontWeight: 600,
+                              color: isActive ? "var(--primary)" : "var(--text-muted)"
+                            }}>
+                              {isActive ? "Visible en Web" : "Oculta"}
+                            </span>
+                            <div style={{
+                              width: "18px",
+                              height: "18px",
+                              borderRadius: "4px",
+                              border: `1px solid ${isActive ? "var(--primary)" : "var(--border-color)"}`,
+                              background: isActive ? "var(--primary)" : "transparent",
+                              display: "flex",
+                              alignItems: "center",
+                              justifyContent: "center",
+                              color: "#fff"
+                            }}>
+                              {isActive && <Check size={12} />}
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                    {branches.length === 0 && (
+                      <div style={{ textAlign: "center", padding: "20px", color: "var(--text-muted)", fontSize: "0.8rem" }}>
+                        No hay sucursales registradas para esta empresa.
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                {/* Card: Estructura y Orden de la Web */}
+                <div className="glass-panel" style={{ padding: "20px", borderRadius: "var(--radius-lg)" }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "14px" }}>
+                    <div>
+                      <h4 className={styles.inputLabel} style={{ margin: 0, fontSize: "0.95rem" }}>
+                        Estructura y Orden de Secciones (Landing)
+                      </h4>
+                      <span style={{ fontSize: "0.7rem", color: "var(--text-muted)" }}>Organiza la jerarquía de contenidos con Subir/Bajar</span>
+                    </div>
+                  </div>
+
+                  <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
+                    {webOrdenWeb.map((secKey, idx) => {
+                      const labelsMap: { [k: string]: { name: string; desc: string } } = {
+                        hero: { name: "Portada y Presentación (Hero)", desc: "Logotipo, banner panorámico y llamado a la acción" },
+                        sucursales: { name: "Nuestras Sucursales", desc: "Listado de sucursales activas, direcciones y teléfonos" },
+                        productos: { name: "Catálogo y Menú Digital", desc: "Listado de productos con fotos, precios y categorías" },
+                        galeria: { name: "Galería Fotográfica", desc: "Mosaico visual de platillos, local e instalaciones" },
+                        contacto: { name: "Contacto y Redes Sociales", desc: "WhatsApp directo, email de info y links de redes" }
+                      };
+                      const info = labelsMap[secKey] || { name: secKey, desc: "Sección personalizada" };
+
+                      return (
+                        <div
+                          key={secKey}
+                          style={{
+                            display: "flex",
+                            alignItems: "center",
+                            justifyContent: "space-between",
+                            padding: "10px 14px",
+                            background: "rgba(255, 255, 255, 0.02)",
+                            border: "1px solid var(--border-color)",
+                            borderRadius: "var(--radius-md)"
+                          }}
+                        >
+                          <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+                            <span style={{
+                              width: "22px",
+                              height: "22px",
+                              borderRadius: "50%",
+                              background: "rgba(255,255,255,0.06)",
+                              border: "1px solid var(--border-color)",
+                              fontSize: "0.75rem",
+                              fontWeight: 700,
+                              color: "var(--text-secondary)",
+                              display: "inline-flex",
+                              alignItems: "center",
+                              justifyContent: "center"
+                            }}>
+                              {idx + 1}
+                            </span>
+                            <div>
+                              <div style={{ fontSize: "0.85rem", fontWeight: 600, color: "var(--text-primary)" }}>{info.name}</div>
+                              <div style={{ fontSize: "0.7rem", color: "var(--text-muted)" }}>{info.desc}</div>
+                            </div>
+                          </div>
+
+                          <div style={{ display: "flex", gap: "6px" }}>
+                            <button
+                              type="button"
+                              onClick={() => handleMoveWebSection(idx, "up")}
+                              disabled={idx === 0}
+                              title="Subir posición"
+                              style={{
+                                background: "rgba(255,255,255,0.05)",
+                                border: "1px solid var(--border-color)",
+                                color: idx === 0 ? "var(--text-muted)" : "var(--text-primary)",
+                                padding: "4px 8px",
+                                borderRadius: "var(--radius-sm)",
+                                cursor: idx === 0 ? "not-allowed" : "pointer"
+                              }}
+                            >
+                              <ArrowUp size={13} />
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleMoveWebSection(idx, "down")}
+                              disabled={idx === webOrdenWeb.length - 1}
+                              title="Bajar posición"
+                              style={{
+                                background: "rgba(255,255,255,0.05)",
+                                border: "1px solid var(--border-color)",
+                                color: idx === webOrdenWeb.length - 1 ? "var(--text-muted)" : "var(--text-primary)",
+                                padding: "4px 8px",
+                                borderRadius: "var(--radius-sm)",
+                                cursor: idx === webOrdenWeb.length - 1 ? "not-allowed" : "pointer"
+                              }}
+                            >
+                              <ArrowDown size={13} />
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+
+              </div>
+
+              {/* Bottom Action Footer */}
+              <div style={{ display: "flex", justifyContent: "flex-end", marginTop: "10px" }}>
+                <button
+                  type="button"
+                  onClick={() => handleSaveWebCustomization()}
+                  disabled={webIsSaving || webIsLoading}
+                  className={styles.formBtn}
+                  style={{ margin: 0, padding: "12px 32px", fontSize: "0.95rem", display: "flex", alignItems: "center", gap: "10px", width: "auto" }}
+                >
+                  <Save size={18} /> {webIsSaving ? "Guardando Configuración..." : "Guardar Personalización"}
+                </button>
               </div>
 
             </div>
@@ -5594,152 +7594,329 @@ export default function Dashboard() {
           
           {/* TAB: CREAR BROKER */}
           {activeTab === "create-broker" && isSuperAdmin && (
-            <div className={styles.deliveriesGrid}>
+            <div className={styles.brokerLayout}>
               
               {/* Formulario (Izquierda) */}
-              <div className={styles.sidebarPanel}>
-                <div className={`glass-panel ${styles.formCard}`}>
-                  <h3 className={styles.sectionTitle} style={{ marginBottom: "12px", display: "flex", alignItems: "center", gap: "8px" }}>
-                    <Users size={18} /> Registrar Broker
+              <div className={`glass-panel ${styles.formCard}`}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "16px" }}>
+                  <h3 className={styles.sectionTitle} style={{ margin: 0, display: "flex", alignItems: "center", gap: "8px" }}>
+                    <Users size={18} /> {editingBroker ? "Editar Broker" : "Registrar Broker"}
                   </h3>
-                  <form onSubmit={handleCreateBroker} style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
-                    {brokerError && <div style={{ color: "var(--danger)", background: "var(--danger-glow)", padding: "8px 12px", borderRadius: "var(--radius-sm)", fontSize: "0.8rem", fontWeight: 500 }}>{brokerError}</div>}
-                    {brokerMessage && <div style={{ color: "var(--success)", background: "var(--success-glow)", padding: "8px 12px", borderRadius: "var(--radius-sm)", fontSize: "0.8rem", fontWeight: 500 }}>{brokerMessage}</div>}
+                  {editingBroker && (
+                    <button
+                      type="button"
+                      onClick={resetBrokerForm}
+                      style={{
+                        background: "transparent",
+                        border: "none",
+                        color: "var(--text-muted)",
+                        fontSize: "0.75rem",
+                        cursor: "pointer",
+                        textDecoration: "underline"
+                      }}
+                    >
+                      Cancelar
+                    </button>
+                  )}
+                </div>
+                <form onSubmit={handleCreateBroker} style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
+                  {brokerError && <div style={{ color: "var(--danger)", background: "var(--danger-glow)", padding: "8px 12px", borderRadius: "var(--radius-sm)", fontSize: "0.8rem", fontWeight: 500 }}>{brokerError}</div>}
+                  {brokerMessage && <div style={{ color: "var(--success)", background: "var(--success-glow)", padding: "8px 12px", borderRadius: "var(--radius-sm)", fontSize: "0.8rem", fontWeight: 500 }}>{brokerMessage}</div>}
 
-                    <div className={styles.formGroup}>
-                      <label className={styles.inputLabel}>Nombre Completo *</label>
-                      <input 
-                        type="text" 
-                        placeholder="Ej. Carlos Broker" 
-                        value={newBrokerName}
-                        onChange={(e) => setNewBrokerName(e.target.value)}
-                        className={styles.formInput}
-                        required
-                        disabled={brokerIsLoading}
-                      />
-                    </div>
+                  <div className={styles.formGroup}>
+                    <label className={styles.inputLabel}>Nombre Completo *</label>
+                    <input 
+                      type="text" 
+                      placeholder="Ej. Carlos Broker" 
+                      value={newBrokerName}
+                      onChange={(e) => setNewBrokerName(e.target.value)}
+                      className={styles.formInput}
+                      required
+                      disabled={brokerIsLoading}
+                    />
+                  </div>
 
-                    <div className={styles.formGroup}>
-                      <label className={styles.inputLabel}>Correo Electrónico *</label>
-                      <input 
-                        type="email" 
-                        placeholder="broker@reparto.com" 
-                        value={newBrokerEmail}
-                        onChange={(e) => setNewBrokerEmail(e.target.value)}
-                        className={styles.formInput}
-                        required
-                        disabled={brokerIsLoading}
-                      />
-                    </div>
+                  <div className={styles.formGroup}>
+                    <label className={styles.inputLabel}>Correo Electrónico *</label>
+                    <input 
+                      type="email" 
+                      placeholder="broker@reparto.com" 
+                      value={newBrokerEmail}
+                      onChange={(e) => setNewBrokerEmail(e.target.value)}
+                      className={styles.formInput}
+                      required
+                      disabled={brokerIsLoading}
+                    />
+                  </div>
 
-                    <div className={styles.formGroup}>
-                      <label className={styles.inputLabel}>Teléfono</label>
-                      <input 
-                        type="text" 
-                        placeholder="Ej. 5512345678" 
-                        value={newBrokerPhone}
-                        onChange={(e) => setNewBrokerPhone(e.target.value)}
-                        className={styles.formInput}
-                        disabled={brokerIsLoading}
-                      />
-                    </div>
+                  <div className={styles.formGroup}>
+                    <label className={styles.inputLabel}>Teléfono</label>
+                    <input 
+                      type="text" 
+                      placeholder="Ej. 5512345678" 
+                      value={newBrokerPhone}
+                      onChange={(e) => setNewBrokerPhone(e.target.value)}
+                      className={styles.formInput}
+                      disabled={brokerIsLoading}
+                    />
+                  </div>
 
-                    <div className={styles.formGroup}>
-                      <label className={styles.inputLabel}>Contraseña *</label>
-                      <input 
-                        type="password" 
-                        placeholder="••••••••" 
-                        value={newBrokerPassword}
-                        onChange={(e) => setNewBrokerPassword(e.target.value)}
-                        className={styles.formInput}
-                        required
-                        disabled={brokerIsLoading}
-                      />
-                    </div>
+                  <div className={styles.formGroup}>
+                    <label className={styles.inputLabel}>
+                      {editingBroker ? "Nueva Contraseña (Opcional)" : "Contraseña *"}
+                    </label>
+                    <input 
+                      type="password" 
+                      placeholder={editingBroker ? "Dejar en blanco para no cambiar" : "••••••••"} 
+                      value={newBrokerPassword}
+                      onChange={(e) => setNewBrokerPassword(e.target.value)}
+                      className={styles.formInput}
+                      required={!editingBroker}
+                      disabled={brokerIsLoading}
+                    />
+                  </div>
 
+                  {editingBroker && (
                     <div className={styles.formGroup}>
-                      <label className={styles.inputLabel}>Empresas Asociadas (Exclusividad)</label>
+                      <label className={styles.inputLabel}>Estado del Broker</label>
                       <select 
-                        multiple 
-                        value={newBrokerCompanies} 
-                        onChange={(e) => {
-                          const options = Array.from(e.target.selectedOptions);
-                          setNewBrokerCompanies(options.map(o => o.value));
-                        }}
-                        className={styles.formInput} 
-                        style={{ height: "auto", minHeight: "100px" }}
+                        value={editBrokerStatus} 
+                        onChange={(e) => setEditBrokerStatus(e.target.value)}
+                        className={styles.formInput}
                         disabled={brokerIsLoading}
                       >
-                        {superAdminCompanies.map(c => (
-                          <option key={c.idEmpresa} value={c.idEmpresa}>{c.NombreEmpresa}</option>
-                        ))}
+                        <option value="active">Activo</option>
+                        <option value="suspended">Suspendido</option>
                       </select>
-                      <p style={{ fontSize: "0.75rem", color: "var(--text-muted)", marginTop: "4px" }}>
-                        Mantén presionado Ctrl o Cmd para seleccionar varias.
-                      </p>
                     </div>
+                  )}
 
+                  <div className={styles.formGroup}>
+                    <label className={styles.inputLabel}>Empresas Asociadas (Exclusividad)</label>
+                    <select 
+                      multiple 
+                      value={newBrokerCompanies} 
+                      onChange={(e) => {
+                        const options = Array.from(e.target.selectedOptions);
+                        setNewBrokerCompanies(options.map(o => o.value));
+                      }}
+                      className={styles.formInput} 
+                      style={{ height: "auto", minHeight: "100px" }}
+                      disabled={brokerIsLoading}
+                    >
+                      {superAdminCompanies.map(c => (
+                        <option key={c.idEmpresa} value={c.idEmpresa}>
+                          {c.NombreEmpresa || c.Nombre_Empresa || c.idEmpresa}
+                        </option>
+                      ))}
+                    </select>
+                    <p style={{ fontSize: "0.75rem", color: "var(--text-muted)", marginTop: "4px" }}>
+                      Mantén presionado Ctrl o Cmd para seleccionar varias.
+                    </p>
+                  </div>
+
+                  <div style={{ display: "flex", flexDirection: "column", gap: "8px", marginTop: "8px" }}>
                     <button 
                       type="submit" 
                       className={`btn-primary ${styles.btnFull}`}
                       disabled={brokerIsLoading}
-                      style={{ marginTop: "8px" }}
                     >
-                      {brokerIsLoading ? "Registrando..." : "Registrar Broker"}
+                      {brokerIsLoading 
+                        ? (editingBroker ? "Guardando..." : "Registrando...") 
+                        : (editingBroker ? "Guardar Cambios" : "Registrar Broker")}
                     </button>
-                  </form>
-                </div>
+                    {editingBroker && (
+                      <button
+                        type="button"
+                        onClick={resetBrokerForm}
+                        style={{
+                          padding: "8px 12px",
+                          background: "rgba(255,255,255,0.04)",
+                          border: "1px solid var(--border-color)",
+                          borderRadius: "var(--radius-sm)",
+                          color: "var(--text-secondary)",
+                          fontSize: "0.82rem",
+                          fontWeight: 600,
+                          cursor: "pointer",
+                          width: "100%"
+                        }}
+                      >
+                        Cancelar Edición
+                      </button>
+                    )}
+                  </div>
+                </form>
               </div>
 
               {/* Lista (Derecha) */}
-              <div className={styles.mainContent}>
-                <div className={`glass-panel ${styles.tableCard}`}>
-                  <h3 className={styles.sectionTitle} style={{ padding: "20px 24px 15px", margin: 0, borderBottom: "1px solid var(--border-color)", display: "flex", alignItems: "center", gap: "10px" }}>
-                    <ClipboardList size={20} style={{ color: "var(--primary)" }} /> Brokers Registrados ({brokersList.length})
-                  </h3>
-                  
-                  <div className={styles.tableContainer}>
-                    <table className={styles.table}>
-                      <thead>
-                        <tr>
-                          <th>Nombre</th>
-                          <th>Correo / Tel</th>
-                          <th>Empresas Asoc.</th>
-                          <th>Repartidores</th>
+              <div className={`glass-panel ${styles.tableCard}`}>
+                <h3 className={styles.sectionTitle} style={{ padding: "20px 24px 15px", margin: 0, borderBottom: "1px solid var(--border-color)", display: "flex", alignItems: "center", gap: "10px" }}>
+                  <ClipboardList size={20} style={{ color: "var(--primary)" }} /> Brokers Registrados ({brokersList.length})
+                </h3>
+                
+                <div className={styles.tableContainer}>
+                  <table className={styles.table}>
+                    <thead>
+                      <tr>
+                        <th>Nombre</th>
+                        <th>Correo / Tel</th>
+                        <th>Estado</th>
+                        <th>Empresas Asoc.</th>
+                        <th>Repartidores</th>
+                        <th style={{ textAlign: "right" }}>Acción</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {brokersList.map((broker: any) => (
+                        <tr key={broker.id}>
+                          <td>
+                            <div style={{ fontWeight: 600, color: "var(--text-primary)" }}>{broker.name}</div>
+                          </td>
+                          <td>
+                            <div style={{ fontSize: "0.85rem", color: "var(--text-secondary)" }}>{broker.email}</div>
+                            <div style={{ fontSize: "0.8rem", color: "var(--text-muted)" }}>{broker.phone || "Sin teléfono"}</div>
+                          </td>
+                          <td>
+                            {broker.status === "suspended" ? (
+                              <span style={{ 
+                                background: "rgba(239, 68, 68, 0.12)", 
+                                border: "1px solid rgba(239, 68, 68, 0.25)",
+                                color: "var(--danger)", 
+                                padding: "3px 8px", 
+                                borderRadius: "var(--radius-sm)", 
+                                fontSize: "0.72rem", 
+                                fontWeight: 700 
+                              }}>
+                                Suspendido
+                              </span>
+                            ) : (
+                              <span style={{ 
+                                background: "rgba(16, 185, 129, 0.12)", 
+                                border: "1px solid rgba(16, 185, 129, 0.25)",
+                                color: "#10b981", 
+                                padding: "3px 8px", 
+                                borderRadius: "var(--radius-sm)", 
+                                fontSize: "0.72rem", 
+                                fontWeight: 700 
+                              }}>
+                                Activo
+                              </span>
+                            )}
+                          </td>
+                          <td>
+                            {broker.empresas_asociadas && broker.empresas_asociadas.length > 0 ? (
+                              <div style={{ display: "flex", gap: "4px", flexWrap: "wrap", maxWidth: "220px" }}>
+                                {broker.empresas_asociadas.map((compId: string) => {
+                                  const found = superAdminCompanies.find(c => c.idEmpresa === compId);
+                                  const compName = found?.NombreEmpresa || found?.Nombre_Empresa || compId;
+                                  return (
+                                    <span 
+                                      key={compId} 
+                                      style={{ 
+                                        background: "rgba(247, 52, 12, 0.08)", 
+                                        color: "var(--primary)", 
+                                        fontSize: "0.72rem", 
+                                        padding: "2px 6px", 
+                                        borderRadius: "4px",
+                                        fontWeight: 500,
+                                        whiteSpace: "nowrap"
+                                      }}
+                                    >
+                                      {compName}
+                                    </span>
+                                  );
+                                })}
+                              </div>
+                            ) : (
+                              <span style={{ fontSize: "0.75rem", color: "var(--text-muted)", fontStyle: "italic" }}>
+                                Sin empresas
+                              </span>
+                            )}
+                          </td>
+                          <td>
+                            <div className={styles.statusBadge} style={{ background: "var(--bg-accent)", color: "var(--text-secondary)" }}>
+                              {(broker.repartidores_asociados || broker.repartidores_asociado || []).length} Repartidores
+                            </div>
+                          </td>
+                          <td style={{ textAlign: "right" }}>
+                            <div style={{ display: "flex", gap: "8px", justifyContent: "flex-end" }}>
+                              <button 
+                                type="button" 
+                                onClick={() => handleEditBrokerClick(broker)}
+                                style={{
+                                  background: "rgba(255,255,255,0.03)",
+                                  border: "1px solid var(--border-color)",
+                                  color: "var(--text-secondary)",
+                                  padding: "6px 12px",
+                                  borderRadius: "var(--radius-sm)",
+                                  fontSize: "0.75rem",
+                                  fontWeight: 600,
+                                  cursor: "pointer",
+                                  transition: "all 0.2s"
+                                }}
+                                onMouseEnter={(e) => {
+                                  e.currentTarget.style.borderColor = "var(--primary)";
+                                  e.currentTarget.style.color = "var(--primary)";
+                                }}
+                                onMouseLeave={(e) => {
+                                  e.currentTarget.style.borderColor = "var(--border-color)";
+                                  e.currentTarget.style.color = "var(--text-secondary)";
+                                }}
+                              >
+                                Editar
+                              </button>
+                              <button 
+                                type="button" 
+                                onClick={() => handleToggleBrokerStatus(broker.id, broker.name, broker.status || "active")}
+                                style={{
+                                  background: broker.status === "suspended" 
+                                    ? "rgba(16, 185, 129, 0.08)" 
+                                    : "rgba(239, 68, 68, 0.06)",
+                                  border: broker.status === "suspended" 
+                                    ? "1px solid rgba(16, 185, 129, 0.25)" 
+                                    : "1px solid rgba(239, 68, 68, 0.2)",
+                                  color: broker.status === "suspended" ? "#10b981" : "var(--danger)",
+                                  padding: "6px 12px",
+                                  borderRadius: "var(--radius-sm)",
+                                  fontSize: "0.75rem",
+                                  fontWeight: 600,
+                                  cursor: "pointer",
+                                  transition: "all 0.2s"
+                                }}
+                                onMouseEnter={(e) => {
+                                  if (broker.status === "suspended") {
+                                    e.currentTarget.style.background = "#10b981";
+                                    e.currentTarget.style.color = "white";
+                                  } else {
+                                    e.currentTarget.style.background = "var(--danger)";
+                                    e.currentTarget.style.color = "white";
+                                  }
+                                }}
+                                onMouseLeave={(e) => {
+                                  if (broker.status === "suspended") {
+                                    e.currentTarget.style.background = "rgba(16, 185, 129, 0.08)";
+                                    e.currentTarget.style.color = "#10b981";
+                                  } else {
+                                    e.currentTarget.style.background = "rgba(239, 68, 68, 0.06)";
+                                    e.currentTarget.style.color = "var(--danger)";
+                                  }
+                                }}
+                              >
+                                {broker.status === "suspended" ? "Reactivar" : "Suspender"}
+                              </button>
+                            </div>
+                          </td>
                         </tr>
-                      </thead>
-                      <tbody>
-                        {brokersList.map((broker: any) => (
-                          <tr key={broker.id}>
-                            <td>
-                              <div style={{ fontWeight: 500, color: "var(--text-primary)" }}>{broker.name}</div>
-                            </td>
-                            <td>
-                              <div style={{ fontSize: "0.85rem", color: "var(--text-secondary)" }}>{broker.email}</div>
-                              <div style={{ fontSize: "0.8rem", color: "var(--text-muted)" }}>{broker.phone || "Sin teléfono"}</div>
-                            </td>
-                            <td>
-                              <div className={styles.statusBadge} style={{ background: "rgba(13, 148, 136, 0.15)", color: "var(--primary)" }}>
-                                {(broker.empresas_asociadas || []).length} Empresas
-                              </div>
-                            </td>
-                            <td>
-                              <div className={styles.statusBadge} style={{ background: "var(--bg-accent)", color: "var(--text-secondary)" }}>
-                                {(broker.repartidores_asociados || []).length} Repartidores
-                              </div>
-                            </td>
-                          </tr>
-                        ))}
-                        {brokersList.length === 0 && (
-                          <tr>
-                            <td colSpan={4} style={{ textAlign: 'center', padding: '30px', color: 'var(--text-muted)' }}>
-                              No hay brokers registrados aún.
-                            </td>
-                          </tr>
-                        )}
-                      </tbody>
-                    </table>
-                  </div>
+                      ))}
+                      {brokersList.length === 0 && (
+                        <tr>
+                          <td colSpan={6} style={{ textAlign: 'center', padding: '30px', color: 'var(--text-muted)' }}>
+                            No hay brokers registrados aún.
+                          </td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
                 </div>
               </div>
             </div>
@@ -5807,19 +7984,6 @@ export default function Dashboard() {
 
                     <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "16px" }}>
                       <div className={styles.formGroup}>
-                        <label className={styles.inputLabel}>Correo Electrónico *</label>
-                        <input 
-                          type="email" 
-                          placeholder="ejemplo@negocio.com" 
-                          value={newCompEmail}
-                          onChange={(e) => setNewCompEmail(e.target.value)}
-                          className={styles.formInput}
-                          required
-                          disabled={compIsLoading}
-                        />
-                      </div>
-
-                      <div className={styles.formGroup}>
                         <label className={styles.inputLabel}>URL Identificador Único (Slug) *</label>
                         <div style={{ display: "flex", gap: "8px" }}>
                           <span style={{ display: "flex", alignItems: "center", padding: "0 10px", background: "rgba(255,255,255,0.04)", border: "1px solid var(--border-color)", borderRadius: "var(--radius-md) 0 0 var(--radius-md)", fontSize: "0.75rem", color: "var(--text-muted)", borderRight: "none" }}>
@@ -5837,9 +8001,7 @@ export default function Dashboard() {
                           />
                         </div>
                       </div>
-                    </div>
 
-                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "16px" }}>
                       <div className={styles.formGroup}>
                         <label className={styles.inputLabel}>Dirección de la Empresa</label>
                         <input 
@@ -5851,34 +8013,180 @@ export default function Dashboard() {
                           disabled={compIsLoading}
                         />
                       </div>
-                      <div className={styles.formGroup}>
-                        <label className={styles.inputLabel}>Descripción de la Empresa</label>
-                        <input 
-                          type="text" 
-                          placeholder="Ej. Pizzería artesanal con servicio a domicilio." 
-                          value={newCompDesc}
-                          onChange={(e) => setNewCompDesc(e.target.value)}
-                          className={styles.formInput}
-                          disabled={compIsLoading}
-                        />
-                      </div>
                     </div>
 
-                    {!editingCompany && (
-                      <div className={styles.formGroup}>
-                        <label className={styles.inputLabel}>Contraseña del Administrador *</label>
-                        <input 
-                          type="password" 
-                          placeholder="••••••••" 
-                          value={newCompPassword}
-                          onChange={(e) => setNewCompPassword(e.target.value)}
-                          className={styles.formInput}
-                          required
-                          disabled={compIsLoading}
-                          minLength={6}
-                        />
+                    <div className={styles.formGroup}>
+                      <label className={styles.inputLabel}>Descripción de la Empresa</label>
+                      <input 
+                        type="text" 
+                        placeholder="Ej. Pizzería artesanal con servicio a domicilio." 
+                        value={newCompDesc}
+                        onChange={(e) => setNewCompDesc(e.target.value)}
+                        className={styles.formInput}
+                        disabled={compIsLoading}
+                      />
+                    </div>
+
+                    {/* Section: Authenticated Users (up to 3) */}
+                    <div style={{ 
+                      background: "rgba(255, 255, 255, 0.02)", 
+                      border: "1px solid var(--border-color)", 
+                      borderRadius: "var(--radius-md)", 
+                      padding: "16px",
+                      display: "flex",
+                      flexDirection: "column",
+                      gap: "14px",
+                      marginTop: "4px"
+                    }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: "10px" }}>
+                        <div>
+                          <h4 style={{ margin: 0, fontSize: "0.92rem", fontWeight: 600, color: "var(--text-primary)", display: "flex", alignItems: "center", gap: "8px" }}>
+                            <Users size={16} style={{ color: "var(--primary)" }} />
+                            Usuarios Administradores ({newCompUsers.length}/3)
+                          </h4>
+                          <p style={{ margin: "3px 0 0 0", fontSize: "0.74rem", color: "var(--text-muted)" }}>
+                            Cuentas autenticadas con acceso al panel. Se registran en Auth y en la tabla de usuarios sin cerrar tu sesión actual.
+                          </p>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={handleAddCompUser}
+                          disabled={newCompUsers.length >= 3 || compIsLoading}
+                          style={{
+                            background: newCompUsers.length >= 3 ? "rgba(255,255,255,0.05)" : "var(--primary-glow)",
+                            border: "1px solid " + (newCompUsers.length >= 3 ? "var(--border-color)" : "rgba(247, 52, 12, 0.25)"),
+                            color: newCompUsers.length >= 3 ? "var(--text-muted)" : "var(--primary)",
+                            padding: "6px 12px",
+                            borderRadius: "var(--radius-sm)",
+                            fontSize: "0.75rem",
+                            fontWeight: 600,
+                            cursor: newCompUsers.length >= 3 ? "not-allowed" : "pointer",
+                            display: "flex",
+                            alignItems: "center",
+                            gap: "6px",
+                            transition: "all 0.2s ease"
+                          }}
+                        >
+                          <Plus size={14} /> Agregar Usuario ({newCompUsers.length}/3)
+                        </button>
                       </div>
-                    )}
+
+                      <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
+                        {newCompUsers.map((u, idx) => (
+                          <div 
+                            key={idx} 
+                            style={{ 
+                              background: "rgba(0, 0, 0, 0.2)", 
+                              border: "1px solid rgba(255, 255, 255, 0.06)", 
+                              borderRadius: "var(--radius-sm)", 
+                              padding: "12px",
+                              display: "flex",
+                              flexDirection: "column",
+                              gap: "10px"
+                            }}
+                          >
+                            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                              <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                                <span style={{ 
+                                  width: "20px", 
+                                  height: "20px", 
+                                  borderRadius: "50%", 
+                                  background: idx === 0 ? "var(--primary)" : "rgba(255,255,255,0.1)", 
+                                  color: "#fff", 
+                                  display: "inline-flex", 
+                                  alignItems: "center", 
+                                  justifyContent: "center", 
+                                  fontSize: "0.7rem", 
+                                  fontWeight: 700 
+                                }}>
+                                  {idx + 1}
+                                </span>
+                                <span style={{ fontSize: "0.8rem", fontWeight: 600, color: "var(--text-secondary)" }}>
+                                  {idx === 0 ? "Administrador Principal (Correo de la Empresa)" : `Administrador #${idx + 1}`}
+                                </span>
+                                {idx === 0 && (
+                                  <span style={{ fontSize: "0.68rem", background: "var(--primary-glow)", color: "var(--primary)", padding: "2px 6px", borderRadius: "10px", fontWeight: 600 }}>
+                                    Principal
+                                  </span>
+                                )}
+                              </div>
+                              {newCompUsers.length > 1 && (
+                                <button
+                                  type="button"
+                                  onClick={() => handleRemoveCompUser(idx)}
+                                  disabled={compIsLoading}
+                                  title="Eliminar este usuario"
+                                  style={{
+                                    background: "rgba(239, 68, 68, 0.1)",
+                                    border: "1px solid rgba(239, 68, 68, 0.2)",
+                                    color: "var(--danger)",
+                                    padding: "4px 8px",
+                                    borderRadius: "var(--radius-sm)",
+                                    fontSize: "0.72rem",
+                                    cursor: "pointer",
+                                    display: "flex",
+                                    alignItems: "center",
+                                    gap: "4px"
+                                  }}
+                                >
+                                  <Trash2 size={12} /> Quitar
+                                </button>
+                              )}
+                            </div>
+
+                            <div style={{ display: "grid", gridTemplateColumns: "1.2fr 1fr 1fr", gap: "10px" }}>
+                              <div>
+                                <label style={{ display: "block", fontSize: "0.72rem", color: "var(--text-muted)", marginBottom: "4px" }}>
+                                  Correo Electrónico *
+                                </label>
+                                <input
+                                  type="email"
+                                  placeholder="admin@empresa.com"
+                                  value={u.email}
+                                  onChange={(e) => handleUpdateCompUser(idx, "email", e.target.value)}
+                                  className={styles.formInput}
+                                  style={{ padding: "8px 10px", fontSize: "0.82rem" }}
+                                  required
+                                  disabled={compIsLoading}
+                                />
+                              </div>
+
+                              <div>
+                                <label style={{ display: "block", fontSize: "0.72rem", color: "var(--text-muted)", marginBottom: "4px" }}>
+                                  {u.id || editingCompany ? "Contraseña (opcional)" : "Contraseña *"}
+                                </label>
+                                <input
+                                  type="password"
+                                  placeholder={u.id || editingCompany ? "•••••••• (conservar)" : "Mínimo 6 caracteres"}
+                                  value={u.password || ""}
+                                  onChange={(e) => handleUpdateCompUser(idx, "password", e.target.value)}
+                                  className={styles.formInput}
+                                  style={{ padding: "8px 10px", fontSize: "0.82rem" }}
+                                  required={!u.id && !editingCompany}
+                                  minLength={u.password ? 6 : undefined}
+                                  disabled={compIsLoading}
+                                />
+                              </div>
+
+                              <div>
+                                <label style={{ display: "block", fontSize: "0.72rem", color: "var(--text-muted)", marginBottom: "4px" }}>
+                                  Nombre / Cargo (opcional)
+                                </label>
+                                <input
+                                  type="text"
+                                  placeholder="Ej. Alejandro Pérez"
+                                  value={u.name || ""}
+                                  onChange={(e) => handleUpdateCompUser(idx, "name", e.target.value)}
+                                  className={styles.formInput}
+                                  style={{ padding: "8px 10px", fontSize: "0.82rem" }}
+                                  disabled={compIsLoading}
+                                />
+                              </div>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
 
                     <div className={styles.formGroup} style={{ borderTop: "1px solid rgba(255,255,255,0.06)", paddingTop: "20px", marginTop: "10px" }}>
                       {editingCompany ? (
@@ -7507,6 +9815,922 @@ export default function Dashboard() {
                       style={{ background: 'var(--primary)', color: '#fff' }}
                     >
                       Guardar Cambios
+                    </button>
+                  </div>
+                </form>
+              </div>
+            </div>
+          )}
+
+          {/* MODAL: CREAR / EDITAR REPARTIDOR */}
+          {isRepartidorModalOpen && (
+            <div style={{
+              position: "fixed",
+              top: 0,
+              left: 0,
+              right: 0,
+              bottom: 0,
+              backgroundColor: "rgba(0, 0, 0, 0.6)",
+              backdropFilter: "blur(4px)",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              zIndex: 9999,
+              padding: "20px"
+            }}>
+              <div className="glass-panel" style={{
+                background: "#ffffff",
+                borderRadius: "var(--radius-lg)",
+                maxWidth: "600px",
+                width: "100%",
+                maxHeight: "90vh",
+                overflowY: "auto",
+                boxShadow: "0 20px 25px -5px rgba(0, 0, 0, 0.2), 0 10px 10px -5px rgba(0, 0, 0, 0.04)",
+                border: "1px solid var(--border-color)",
+                padding: "24px"
+              }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", borderBottom: "1px solid var(--border-color)", paddingBottom: "14px", marginBottom: "20px" }}>
+                  <div>
+                    <h3 style={{ margin: 0, fontSize: "1.2rem", fontWeight: 700, color: "var(--text-primary)", display: "flex", alignItems: "center", gap: "8px" }}>
+                      <Truck size={22} style={{ color: "var(--primary)" }} />
+                      {editingRepartidor ? "Editar Repartidor" : "Registrar Nuevo Repartidor"}
+                    </h3>
+                    <p style={{ margin: "4px 0 0", fontSize: "0.8rem", color: "var(--text-secondary)" }}>
+                      {editingRepartidor 
+                        ? `Modificando registro en la tabla repartidores (${editingRepartidor.id_repartidor || editingRepartidor.id})`
+                        : "Ingresa los datos del conductor para integrarlo a la base de datos de repartidores."}
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={handleCloseRepartidorModal}
+                    style={{
+                      background: "transparent",
+                      border: "none",
+                      fontSize: "1.3rem",
+                      cursor: "pointer",
+                      color: "var(--text-muted)",
+                      lineHeight: 1
+                    }}
+                  >
+                    ✕
+                  </button>
+                </div>
+
+                {repError && (
+                  <div style={{
+                    padding: "10px 14px",
+                    background: "rgba(247, 52, 12, 0.08)",
+                    border: "1px solid rgba(247, 52, 12, 0.25)",
+                    borderRadius: "var(--radius-sm)",
+                    color: "var(--primary)",
+                    fontSize: "0.82rem",
+                    marginBottom: "16px",
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "8px"
+                  }}>
+                    <AlertCircle size={16} /> {repError}
+                  </div>
+                )}
+
+                {repSuccess && (
+                  <div style={{
+                    padding: "10px 14px",
+                    background: "rgba(0, 0, 0, 0.04)",
+                    border: "1px solid var(--border-color)",
+                    borderRadius: "var(--radius-sm)",
+                    color: "var(--text-primary)",
+                    fontSize: "0.82rem",
+                    marginBottom: "16px",
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "8px"
+                  }}>
+                    <CheckCircle2 size={16} style={{ color: "var(--primary)" }} /> {repSuccess}
+                  </div>
+                )}
+
+                <form onSubmit={handleSaveRepartidor} style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
+                  {/* Nombre */}
+                  <div className={styles.formGroup}>
+                    <label className={styles.inputLabel} style={{ fontWeight: 600, color: "var(--text-primary)" }}>
+                      Nombre Completo *
+                    </label>
+                    <input
+                      type="text"
+                      required
+                      placeholder="Ej. Juan Pérez Garza"
+                      value={repName}
+                      onChange={(e) => setRepName(e.target.value)}
+                      className={styles.formInput}
+                      style={{ padding: "10px 12px" }}
+                      disabled={repIsLoading}
+                    />
+                  </div>
+
+                  {/* Email & Phone */}
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "12px" }}>
+                    <div className={styles.formGroup}>
+                      <label className={styles.inputLabel} style={{ fontWeight: 600, color: "var(--text-primary)" }}>
+                        Correo Electrónico *
+                      </label>
+                      <input
+                        type="email"
+                        required
+                        placeholder="juan.perez@reparto.mx"
+                        value={repEmail}
+                        onChange={(e) => setRepEmail(e.target.value)}
+                        className={styles.formInput}
+                        style={{ padding: "10px 12px" }}
+                        disabled={repIsLoading}
+                      />
+                    </div>
+                    <div className={styles.formGroup}>
+                      <label className={styles.inputLabel} style={{ fontWeight: 600, color: "var(--text-primary)" }}>
+                        Teléfono
+                      </label>
+                      <input
+                        type="tel"
+                        placeholder="8112345678"
+                        value={repPhone}
+                        onChange={(e) => setRepPhone(e.target.value)}
+                        className={styles.formInput}
+                        style={{ padding: "10px 12px" }}
+                        disabled={repIsLoading}
+                      />
+                    </div>
+                  </div>
+
+                  {/* Broker Responsable (broker_id) */}
+                  <div className={styles.formGroup}>
+                    <label className={styles.inputLabel} style={{ fontWeight: 600, color: "var(--text-primary)" }}>
+                      Broker Asignado (broker_id)
+                    </label>
+                    {isBroker && !isSuperAdmin ? (
+                      <div style={{
+                        padding: "10px 12px",
+                        background: "rgba(0, 0, 0, 0.04)",
+                        border: "1px solid var(--border-color)",
+                        borderRadius: "var(--radius-sm)",
+                        fontSize: "0.85rem",
+                        color: "var(--text-primary)",
+                        display: "flex",
+                        alignItems: "center",
+                        gap: "8px"
+                      }}>
+                        <Users size={16} style={{ color: "var(--primary)" }} />
+                        <span style={{ fontWeight: 600 }}>{currentUserName || "Tu cuenta de Broker"}</span>
+                        <span style={{ fontSize: "0.75rem", color: "var(--text-muted)", marginLeft: "auto", fontFamily: "var(--font-mono)" }}>
+                          {repBrokerId ? `ID: ${repBrokerId.slice(0, 8)}...` : "(Asignación automática)"}
+                        </span>
+                      </div>
+                    ) : (
+                      <select
+                        value={repBrokerId}
+                        onChange={(e) => setRepBrokerId(e.target.value)}
+                        className={styles.formInput}
+                        style={{ padding: "10px 12px" }}
+                        disabled={repIsLoading}
+                      >
+                        <option value="">-- Sin Broker asignado (NULL) --</option>
+                        {brokersList.map((b: any) => (
+                          <option key={b.id} value={b.id}>
+                            {b.name || b.email || b.id} (ID: {String(b.id).slice(0, 8)}...)
+                          </option>
+                        ))}
+                      </select>
+                    )}
+                  </div>
+
+                  {/* Fotos del Conductor (driver_photos) */}
+                  <div className={styles.formGroup} style={{ borderTop: "1px solid var(--border-color)", paddingTop: "12px" }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "6px" }}>
+                      <label className={styles.inputLabel} style={{ fontWeight: 600, color: "var(--text-primary)", margin: 0 }}>
+                        Fotos del Repartidor / Identificación (driver_photos)
+                      </label>
+                      <span style={{ fontSize: "0.72rem", color: "var(--text-muted)" }}>
+                        {repDriverPhotoPreviews.length} {repDriverPhotoPreviews.length === 1 ? "foto" : "fotos"}
+                      </span>
+                    </div>
+                    <input
+                      type="file"
+                      accept="image/*"
+                      multiple
+                      onChange={handleRepDriverPhotosSelected}
+                      className={styles.formInput}
+                      style={{ padding: "8px" }}
+                      disabled={repIsLoading}
+                    />
+                    {repDriverPhotoPreviews.length > 0 && (
+                      <div style={{ display: "flex", flexWrap: "wrap", gap: "8px", marginTop: "10px" }}>
+                        {repDriverPhotoPreviews.map((url, idx) => (
+                          <div key={idx} style={{ position: "relative", width: "64px", height: "64px", borderRadius: "8px", overflow: "hidden", border: "1px solid var(--border-color)" }}>
+                            <img src={url} alt={`Driver ${idx}`} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+                            <button
+                              type="button"
+                              onClick={() => handleRemoveRepDriverPhoto(idx)}
+                              title="Eliminar foto"
+                              style={{
+                                position: "absolute",
+                                top: "2px",
+                                right: "2px",
+                                background: "rgba(0, 0, 0, 0.7)",
+                                color: "white",
+                                border: "none",
+                                borderRadius: "50%",
+                                width: "18px",
+                                height: "18px",
+                                fontSize: "11px",
+                                cursor: "pointer",
+                                display: "flex",
+                                alignItems: "center",
+                                justifyContent: "center"
+                              }}
+                            >
+                              ✕
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Fotos del Vehículo (vehicle_photos) */}
+                  <div className={styles.formGroup} style={{ borderTop: "1px solid var(--border-color)", paddingTop: "12px" }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "6px" }}>
+                      <label className={styles.inputLabel} style={{ fontWeight: 600, color: "var(--text-primary)", margin: 0 }}>
+                        Fotos del Vehículo / Placas (vehicle_photos)
+                      </label>
+                      <span style={{ fontSize: "0.72rem", color: "var(--text-muted)" }}>
+                        {repVehiclePhotoPreviews.length} {repVehiclePhotoPreviews.length === 1 ? "foto" : "fotos"}
+                      </span>
+                    </div>
+                    <input
+                      type="file"
+                      accept="image/*"
+                      multiple
+                      onChange={handleRepVehiclePhotosSelected}
+                      className={styles.formInput}
+                      style={{ padding: "8px" }}
+                      disabled={repIsLoading}
+                    />
+                    {repVehiclePhotoPreviews.length > 0 && (
+                      <div style={{ display: "flex", flexWrap: "wrap", gap: "8px", marginTop: "10px" }}>
+                        {repVehiclePhotoPreviews.map((url, idx) => (
+                          <div key={idx} style={{ position: "relative", width: "64px", height: "64px", borderRadius: "8px", overflow: "hidden", border: "1px solid var(--border-color)" }}>
+                            <img src={url} alt={`Vehicle ${idx}`} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+                            <button
+                              type="button"
+                              onClick={() => handleRemoveRepVehiclePhoto(idx)}
+                              title="Eliminar foto"
+                              style={{
+                                position: "absolute",
+                                top: "2px",
+                                right: "2px",
+                                background: "rgba(0, 0, 0, 0.7)",
+                                color: "white",
+                                border: "none",
+                                borderRadius: "50%",
+                                width: "18px",
+                                height: "18px",
+                                fontSize: "11px",
+                                cursor: "pointer",
+                                display: "flex",
+                                alignItems: "center",
+                                justifyContent: "center"
+                              }}
+                            >
+                              ✕
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* ID / Metadata readonly info if editing */}
+                  {editingRepartidor && (
+                    <div style={{
+                      padding: "10px 14px",
+                      background: "rgba(0, 0, 0, 0.02)",
+                      border: "1px solid var(--border-color)",
+                      borderRadius: "var(--radius-sm)",
+                      fontSize: "0.75rem",
+                      color: "var(--text-muted)",
+                      display: "flex",
+                      flexDirection: "column",
+                      gap: "4px"
+                    }}>
+                      <div><strong>id_repartidor:</strong> {editingRepartidor.id_repartidor || editingRepartidor.id}</div>
+                      <div><strong>created_at:</strong> {editingRepartidor.created_at ? new Date(editingRepartidor.created_at).toLocaleString("es-MX") : "N/A"}</div>
+                      {editingRepartidor.reviews && (
+                        <div><strong>reviews:</strong> {Array.isArray(editingRepartidor.reviews) ? `${editingRepartidor.reviews.length} opiniones registradas` : "Sin opiniones"}</div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Action buttons */}
+                  <div style={{ display: "flex", justifyContent: "flex-end", gap: "10px", marginTop: "12px", borderTop: "1px solid var(--border-color)", paddingTop: "16px" }}>
+                    <button
+                      type="button"
+                      onClick={handleCloseRepartidorModal}
+                      disabled={repIsLoading}
+                      style={{
+                        padding: "9px 18px",
+                        background: "rgba(0, 0, 0, 0.04)",
+                        border: "1px solid var(--border-color)",
+                        borderRadius: "var(--radius-md)",
+                        color: "var(--text-primary)",
+                        fontWeight: 600,
+                        fontSize: "0.85rem",
+                        cursor: "pointer"
+                      }}
+                    >
+                      Cancelar
+                    </button>
+                    <button
+                      type="submit"
+                      disabled={repIsLoading}
+                      style={{
+                        padding: "9px 22px",
+                        background: "var(--primary)",
+                        border: "none",
+                        borderRadius: "var(--radius-md)",
+                        color: "#ffffff",
+                        fontWeight: 600,
+                        fontSize: "0.85rem",
+                        cursor: "pointer",
+                        display: "flex",
+                        alignItems: "center",
+                        gap: "6px",
+                        boxShadow: "0 2px 4px rgba(247, 52, 12, 0.25)"
+                      }}
+                    >
+                      {repIsLoading ? "Guardando..." : (editingRepartidor ? "Guardar Cambios" : "Crear Repartidor")}
+                    </button>
+                  </div>
+                </form>
+              </div>
+            </div>
+          )}
+
+          {/* MODAL: GALERÍA DE FOTOS DEL REPARTIDOR */}
+          {viewingRepartidorGallery && (
+            <div style={{
+              position: "fixed",
+              top: 0,
+              left: 0,
+              right: 0,
+              bottom: 0,
+              backgroundColor: "rgba(0, 0, 0, 0.7)",
+              backdropFilter: "blur(4px)",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              zIndex: 9999,
+              padding: "20px"
+            }}>
+              <div className="glass-panel" style={{
+                background: "#ffffff",
+                borderRadius: "var(--radius-lg)",
+                maxWidth: "700px",
+                width: "100%",
+                maxHeight: "85vh",
+                overflowY: "auto",
+                boxShadow: "0 20px 25px -5px rgba(0, 0, 0, 0.25)",
+                border: "1px solid var(--border-color)",
+                padding: "24px"
+              }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", borderBottom: "1px solid var(--border-color)", paddingBottom: "14px", marginBottom: "20px" }}>
+                  <div>
+                    <h3 style={{ margin: 0, fontSize: "1.2rem", fontWeight: 700, color: "var(--text-primary)", display: "flex", alignItems: "center", gap: "8px" }}>
+                      <ImageIcon size={22} style={{ color: "var(--primary)" }} />
+                      Fotos de {viewingRepartidorGallery.name || viewingRepartidorGallery.email}
+                    </h3>
+                    <p style={{ margin: "4px 0 0", fontSize: "0.8rem", color: "var(--text-secondary)" }}>
+                      ID: {viewingRepartidorGallery.id_repartidor || viewingRepartidorGallery.id}
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setViewingRepartidorGallery(null)}
+                    style={{
+                      background: "transparent",
+                      border: "none",
+                      fontSize: "1.3rem",
+                      cursor: "pointer",
+                      color: "var(--text-muted)",
+                      lineHeight: 1
+                    }}
+                  >
+                    ✕
+                  </button>
+                </div>
+
+                {/* Section 1: Fotos del Conductor */}
+                <div style={{ marginBottom: "24px" }}>
+                  <h4 style={{ margin: "0 0 10px 0", fontSize: "0.95rem", fontWeight: 600, color: "var(--text-primary)" }}>
+                    Fotos del Conductor / Perfil ({Array.isArray(viewingRepartidorGallery.driver_photos) ? viewingRepartidorGallery.driver_photos.length : 0})
+                  </h4>
+                  {Array.isArray(viewingRepartidorGallery.driver_photos) && viewingRepartidorGallery.driver_photos.length > 0 ? (
+                    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(140px, 1fr))", gap: "12px" }}>
+                      {viewingRepartidorGallery.driver_photos.map((url: string, idx: number) => (
+                        <a key={idx} href={url} target="_blank" rel="noopener noreferrer" style={{ display: "block", borderRadius: "8px", overflow: "hidden", border: "1px solid var(--border-color)", aspectRatio: "1/1", position: "relative" }}>
+                          <img src={url} alt={`Driver ${idx}`} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+                        </a>
+                      ))}
+                    </div>
+                  ) : (
+                    <div style={{ padding: "16px", background: "rgba(0, 0, 0, 0.03)", borderRadius: "var(--radius-sm)", color: "var(--text-muted)", fontSize: "0.82rem", textAlign: "center" }}>
+                      No hay fotos del conductor registradas en este perfil.
+                    </div>
+                  )}
+                </div>
+
+                {/* Section 2: Fotos del Vehículo */}
+                <div>
+                  <h4 style={{ margin: "0 0 10px 0", fontSize: "0.95rem", fontWeight: 600, color: "var(--text-primary)" }}>
+                    Fotos del Vehículo / Placas ({Array.isArray(viewingRepartidorGallery.vehicle_photos) ? viewingRepartidorGallery.vehicle_photos.length : 0})
+                  </h4>
+                  {Array.isArray(viewingRepartidorGallery.vehicle_photos) && viewingRepartidorGallery.vehicle_photos.length > 0 ? (
+                    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(140px, 1fr))", gap: "12px" }}>
+                      {viewingRepartidorGallery.vehicle_photos.map((url: string, idx: number) => (
+                        <a key={idx} href={url} target="_blank" rel="noopener noreferrer" style={{ display: "block", borderRadius: "8px", overflow: "hidden", border: "1px solid var(--border-color)", aspectRatio: "1/1", position: "relative" }}>
+                          <img src={url} alt={`Vehicle ${idx}`} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+                        </a>
+                      ))}
+                    </div>
+                  ) : (
+                    <div style={{ padding: "16px", background: "rgba(0, 0, 0, 0.03)", borderRadius: "var(--radius-sm)", color: "var(--text-muted)", fontSize: "0.82rem", textAlign: "center" }}>
+                      No hay fotos del vehículo registradas en este perfil.
+                    </div>
+                  )}
+                </div>
+
+                <div style={{ marginTop: "20px", display: "flex", justifyContent: "flex-end", borderTop: "1px solid var(--border-color)", paddingTop: "14px" }}>
+                  <button
+                    type="button"
+                    onClick={() => setViewingRepartidorGallery(null)}
+                    style={{
+                      padding: "8px 18px",
+                      background: "rgba(0, 0, 0, 0.04)",
+                      border: "1px solid var(--border-color)",
+                      borderRadius: "var(--radius-md)",
+                      color: "var(--text-primary)",
+                      fontWeight: 600,
+                      fontSize: "0.82rem",
+                      cursor: "pointer"
+                    }}
+                  >
+                    Cerrar
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* MODAL: EDITAR UBICACIÓN, FOTOS Y TARIFAS DE SUCURSAL */}
+          {sucursalModalOpen && editingSucursal && (
+            <div style={{
+              position: "fixed",
+              top: 0,
+              left: 0,
+              right: 0,
+              bottom: 0,
+              backgroundColor: "rgba(0, 0, 0, 0.65)",
+              backdropFilter: "blur(4px)",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              zIndex: 9999,
+              padding: "20px"
+            }}>
+              <div className="glass-panel" style={{
+                background: "#ffffff",
+                borderRadius: "var(--radius-lg)",
+                maxWidth: "680px",
+                width: "100%",
+                maxHeight: "90vh",
+                overflowY: "auto",
+                boxShadow: "0 20px 25px -5px rgba(0, 0, 0, 0.25)",
+                border: "1px solid var(--border-color)",
+                padding: "24px"
+              }}>
+                {/* Modal Header */}
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", borderBottom: "1px solid var(--border-color)", paddingBottom: "14px", marginBottom: "20px" }}>
+                  <div>
+                    <h3 style={{ margin: 0, fontSize: "1.2rem", fontWeight: 700, color: "var(--text-primary)", display: "flex", alignItems: "center", gap: "8px" }}>
+                      <Store size={22} style={{ color: "var(--primary)" }} />
+                      Configuración de Sucursal y Tarifas
+                    </h3>
+                    <p style={{ margin: "4px 0 0", fontSize: "0.8rem", color: "var(--text-secondary)" }}>
+                      {editingSucursal.NombreSucursal || "Sucursal"} • Empresa ID: <span style={{ fontFamily: "var(--font-mono)" }}>{editingSucursal.IDEmpresa}</span>
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={handleCloseSucursalModal}
+                    style={{
+                      background: "transparent",
+                      border: "none",
+                      fontSize: "1.3rem",
+                      cursor: "pointer",
+                      color: "var(--text-muted)",
+                      lineHeight: 1
+                    }}
+                  >
+                    ✕
+                  </button>
+                </div>
+
+                {sucursalError && (
+                  <div style={{
+                    padding: "10px 14px",
+                    background: "rgba(247, 52, 12, 0.08)",
+                    border: "1px solid rgba(247, 52, 12, 0.25)",
+                    borderRadius: "var(--radius-sm)",
+                    color: "var(--primary)",
+                    fontSize: "0.82rem",
+                    marginBottom: "16px",
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "8px"
+                  }}>
+                    <AlertCircle size={16} /> {sucursalError}
+                  </div>
+                )}
+
+                {sucursalSuccess && (
+                  <div style={{
+                    padding: "10px 14px",
+                    background: "rgba(0, 0, 0, 0.04)",
+                    border: "1px solid var(--border-color)",
+                    borderRadius: "var(--radius-sm)",
+                    color: "var(--text-primary)",
+                    fontSize: "0.82rem",
+                    marginBottom: "16px",
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "8px"
+                  }}>
+                    <CheckCircle2 size={16} style={{ color: "var(--primary)" }} /> {sucursalSuccess}
+                  </div>
+                )}
+
+                <form onSubmit={handleSaveSucursal} style={{ display: "flex", flexDirection: "column", gap: "20px" }}>
+                  {/* SECCIÓN 1: UBICACIÓN */}
+                  <div style={{ background: "rgba(0, 0, 0, 0.02)", padding: "16px", borderRadius: "var(--radius-md)", border: "1px solid var(--border-color)" }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "12px" }}>
+                      <MapPin size={18} style={{ color: "var(--primary)" }} />
+                      <h4 style={{ margin: 0, fontSize: "0.95rem", fontWeight: 700, color: "var(--text-primary)" }}>
+                        1. Ubicación de la Sucursal
+                      </h4>
+                    </div>
+
+                    <div className={styles.formGroup} style={{ marginBottom: "12px" }}>
+                      <label className={styles.inputLabel} style={{ fontWeight: 600, color: "var(--text-primary)" }}>
+                        Dirección (DireccionSucursal)
+                      </label>
+                      <input
+                        type="text"
+                        placeholder="Ej. Puerto Mazatlán 3802, 64790 Monterrey, Nuevo León, Mexico"
+                        value={sucursalFormDireccion}
+                        onChange={(e) => setSucursalFormDireccion(e.target.value)}
+                        className={styles.formInput}
+                        style={{ padding: "10px 12px" }}
+                        disabled={sucursalIsLoading}
+                      />
+                    </div>
+
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "12px" }}>
+                      <div className={styles.formGroup}>
+                        <label className={styles.inputLabel} style={{ fontWeight: 600, color: "var(--text-primary)" }}>
+                          Latitud (Latitud)
+                        </label>
+                        <input
+                          type="number"
+                          step="any"
+                          placeholder="25.624082"
+                          value={sucursalFormLatitud}
+                          onChange={(e) => setSucursalFormLatitud(e.target.value)}
+                          className={styles.formInput}
+                          style={{ padding: "10px 12px", fontFamily: "var(--font-mono)" }}
+                          disabled={sucursalIsLoading}
+                        />
+                      </div>
+                      <div className={styles.formGroup}>
+                        <label className={styles.inputLabel} style={{ fontWeight: 600, color: "var(--text-primary)" }}>
+                          Longitud (Longitud)
+                        </label>
+                        <input
+                          type="number"
+                          step="any"
+                          placeholder="-100.286626"
+                          value={sucursalFormLongitud}
+                          onChange={(e) => setSucursalFormLongitud(e.target.value)}
+                          className={styles.formInput}
+                          style={{ padding: "10px 12px", fontFamily: "var(--font-mono)" }}
+                          disabled={sucursalIsLoading}
+                        />
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* SECCIÓN 2: LINK DE GOOGLE MAPS */}
+                  <div style={{ background: "rgba(0, 0, 0, 0.02)", padding: "16px", borderRadius: "var(--radius-md)", border: "1px solid var(--border-color)" }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "12px" }}>
+                      <ExternalLink size={18} style={{ color: "var(--primary)" }} />
+                      <h4 style={{ margin: 0, fontSize: "0.95rem", fontWeight: 700, color: "var(--text-primary)" }}>
+                        2. Link de Google Maps (LinkGoogleMaps)
+                      </h4>
+                    </div>
+
+                    <div className={styles.formGroup}>
+                      <input
+                        type="url"
+                        placeholder="https://maps.app.goo.gl/..."
+                        value={sucursalFormLinkGoogleMaps}
+                        onChange={(e) => setSucursalFormLinkGoogleMaps(e.target.value)}
+                        className={styles.formInput}
+                        style={{ padding: "10px 12px" }}
+                        disabled={sucursalIsLoading}
+                      />
+                      {sucursalFormLinkGoogleMaps.trim() && (
+                        <div style={{ marginTop: "6px" }}>
+                          <a
+                            href={sucursalFormLinkGoogleMaps}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            style={{
+                              fontSize: "0.75rem",
+                              color: "var(--primary)",
+                              display: "inline-flex",
+                              alignItems: "center",
+                              gap: "4px",
+                              fontWeight: 600,
+                              textDecoration: "underline"
+                            }}
+                          >
+                            <ExternalLink size={12} /> Abrir y verificar enlace en Google Maps
+                          </a>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* SECCIÓN 3: FOTOS DE SUCURSAL */}
+                  <div style={{ background: "rgba(0, 0, 0, 0.02)", padding: "16px", borderRadius: "var(--radius-md)", border: "1px solid var(--border-color)" }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "12px" }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                        <ImageIcon size={18} style={{ color: "var(--primary)" }} />
+                        <h4 style={{ margin: 0, fontSize: "0.95rem", fontWeight: 700, color: "var(--text-primary)" }}>
+                          3. Fotos de la Sucursal (FotosSucursales)
+                        </h4>
+                      </div>
+                      <span style={{ fontSize: "0.75rem", color: "var(--text-muted)" }}>
+                        {sucursalFormPhotoPreviews.length} fotos registradas
+                      </span>
+                    </div>
+
+                    <input
+                      type="file"
+                      accept="image/*"
+                      multiple
+                      onChange={handleSucursalPhotosSelected}
+                      className={styles.formInput}
+                      style={{ padding: "8px" }}
+                      disabled={sucursalIsLoading}
+                    />
+
+                    {sucursalFormPhotoPreviews.length > 0 && (
+                      <div style={{ display: "flex", flexWrap: "wrap", gap: "10px", marginTop: "12px" }}>
+                        {sucursalFormPhotoPreviews.map((url, idx) => (
+                          <div key={idx} style={{ position: "relative", width: "70px", height: "70px", borderRadius: "8px", overflow: "hidden", border: "1px solid var(--border-color)" }}>
+                            <img src={url} alt={`Sucursal foto ${idx}`} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+                            <button
+                              type="button"
+                              onClick={() => handleRemoveSucursalPhoto(idx)}
+                              title="Eliminar foto"
+                              style={{
+                                position: "absolute",
+                                top: "2px",
+                                right: "2px",
+                                background: "rgba(0, 0, 0, 0.75)",
+                                color: "white",
+                                border: "none",
+                                borderRadius: "50%",
+                                width: "18px",
+                                height: "18px",
+                                fontSize: "11px",
+                                cursor: "pointer",
+                                display: "flex",
+                                alignItems: "center",
+                                justifyContent: "center"
+                              }}
+                            >
+                              ✕
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* SECCIÓN 4: TARIFAS DE ENVÍO (JSONB) */}
+                  <div style={{ background: "rgba(0, 0, 0, 0.02)", padding: "16px", borderRadius: "var(--radius-md)", border: "1px solid var(--border-color)" }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "12px" }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                        <Percent size={18} style={{ color: "var(--primary)" }} />
+                        <h4 style={{ margin: 0, fontSize: "0.95rem", fontWeight: 700, color: "var(--text-primary)" }}>
+                          4. Tarifas de Envío (Columna JSON 'Tarifas')
+                        </h4>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setSucursalShowRawJson(!sucursalShowRawJson)}
+                        style={{
+                          background: "none",
+                          border: "none",
+                          color: "var(--primary)",
+                          fontSize: "0.75rem",
+                          fontWeight: 600,
+                          cursor: "pointer",
+                          textDecoration: "underline"
+                        }}
+                      >
+                        {sucursalShowRawJson ? "Cambiar a Editor Visual" : "Ver / Editar JSON"}
+                      </button>
+                    </div>
+
+                    {sucursalShowRawJson ? (
+                      <div>
+                        <textarea
+                          rows={7}
+                          value={sucursalRawJsonText}
+                          onChange={(e) => setSucursalRawJsonText(e.target.value)}
+                          className={styles.formInput}
+                          style={{ fontFamily: "monospace", fontSize: "0.8rem", width: "100%", boxSizing: "border-box" }}
+                          disabled={sucursalIsLoading}
+                        />
+                        <span style={{ fontSize: "0.7rem", color: "var(--text-muted)", marginTop: "4px", display: "block" }}>
+                          Ejemplo: [{`{"min_km": 0, "max_km": 5, "precio": 40}`}, {`{"km_extra": true, "precio_por_km": 10}`}]
+                        </span>
+                      </div>
+                    ) : (
+                      <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
+                        {/* Table of ranges */}
+                        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr auto", gap: "8px", alignItems: "center", fontSize: "0.75rem", fontWeight: 600, color: "var(--text-secondary)", marginBottom: "4px" }}>
+                          <span>Desde (min km)</span>
+                          <span>Hasta (max km)</span>
+                          <span>Precio ($ MXN)</span>
+                          <span></span>
+                        </div>
+
+                        {sucursalFormTarifas.map((tier, idx) => (
+                          <div key={idx} style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr auto", gap: "8px", alignItems: "center" }}>
+                            <input
+                              type="number"
+                              min="0"
+                              value={tier.min_km}
+                              onChange={(e) => handleUpdateTarifaTier(idx, "min_km", Number(e.target.value))}
+                              className={styles.formInput}
+                              style={{ padding: "7px 10px" }}
+                              disabled={sucursalIsLoading}
+                            />
+                            <input
+                              type="number"
+                              min="1"
+                              value={tier.max_km}
+                              onChange={(e) => handleUpdateTarifaTier(idx, "max_km", Number(e.target.value))}
+                              className={styles.formInput}
+                              style={{ padding: "7px 10px" }}
+                              disabled={sucursalIsLoading}
+                            />
+                            <div style={{ position: "relative" }}>
+                              <span style={{ position: "absolute", left: "8px", top: "50%", transform: "translateY(-50%)", fontSize: "0.8rem", color: "var(--text-muted)" }}>$</span>
+                              <input
+                                type="number"
+                                min="0"
+                                value={tier.precio}
+                                onChange={(e) => handleUpdateTarifaTier(idx, "precio", Number(e.target.value))}
+                                className={styles.formInput}
+                                style={{ padding: "7px 10px 7px 22px" }}
+                                disabled={sucursalIsLoading}
+                              />
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => handleRemoveTarifaTier(idx)}
+                              title="Eliminar rango"
+                              style={{
+                                background: "rgba(247, 52, 12, 0.08)",
+                                border: "1px solid rgba(247, 52, 12, 0.2)",
+                                color: "var(--primary)",
+                                borderRadius: "var(--radius-sm)",
+                                padding: "6px 8px",
+                                cursor: "pointer",
+                                display: "flex",
+                                alignItems: "center",
+                                justifyContent: "center"
+                              }}
+                            >
+                              <Trash2 size={13} />
+                            </button>
+                          </div>
+                        ))}
+
+                        <button
+                          type="button"
+                          onClick={handleAddTarifaTier}
+                          style={{
+                            padding: "6px 12px",
+                            background: "rgba(0, 0, 0, 0.04)",
+                            border: "1px dashed var(--border-color)",
+                            borderRadius: "var(--radius-sm)",
+                            color: "var(--text-primary)",
+                            fontSize: "0.75rem",
+                            fontWeight: 600,
+                            cursor: "pointer",
+                            display: "inline-flex",
+                            alignItems: "center",
+                            gap: "6px",
+                            width: "fit-content",
+                            marginTop: "4px"
+                          }}
+                        >
+                          <Plus size={13} /> Agregar Rango de Km
+                        </button>
+
+                        {/* Km Extra Configuration */}
+                        <div style={{ marginTop: "12px", paddingTop: "12px", borderTop: "1px solid var(--border-color)", display: "flex", alignItems: "center", gap: "12px" }}>
+                          <label style={{ display: "flex", alignItems: "center", gap: "6px", fontSize: "0.82rem", fontWeight: 600, color: "var(--text-primary)", cursor: "pointer" }}>
+                            <input
+                              type="checkbox"
+                              checked={sucursalKmExtraEnabled}
+                              onChange={(e) => setSucursalKmExtraEnabled(e.target.checked)}
+                              disabled={sucursalIsLoading}
+                            />
+                            Cobro por Kilómetro Extra (km_extra)
+                          </label>
+
+                          {sucursalKmExtraEnabled && (
+                            <div style={{ display: "flex", alignItems: "center", gap: "6px", marginLeft: "auto" }}>
+                              <span style={{ fontSize: "0.8rem", color: "var(--text-secondary)" }}>Precio/km: $</span>
+                              <input
+                                type="number"
+                                min="1"
+                                value={sucursalKmExtraPrecio}
+                                onChange={(e) => setSucursalKmExtraPrecio(Number(e.target.value))}
+                                className={styles.formInput}
+                                style={{ width: "70px", padding: "6px 8px" }}
+                                disabled={sucursalIsLoading}
+                              />
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Action buttons */}
+                  <div style={{ display: "flex", justifyContent: "flex-end", gap: "10px", marginTop: "8px", borderTop: "1px solid var(--border-color)", paddingTop: "16px" }}>
+                    <button
+                      type="button"
+                      onClick={handleCloseSucursalModal}
+                      disabled={sucursalIsLoading}
+                      style={{
+                        padding: "9px 18px",
+                        background: "rgba(0, 0, 0, 0.04)",
+                        border: "1px solid var(--border-color)",
+                        borderRadius: "var(--radius-md)",
+                        color: "var(--text-primary)",
+                        fontWeight: 600,
+                        fontSize: "0.85rem",
+                        cursor: "pointer"
+                      }}
+                    >
+                      Cancelar
+                    </button>
+                    <button
+                      type="submit"
+                      disabled={sucursalIsLoading}
+                      style={{
+                        padding: "9px 22px",
+                        background: "var(--primary)",
+                        border: "none",
+                        borderRadius: "var(--radius-md)",
+                        color: "#ffffff",
+                        fontWeight: 600,
+                        fontSize: "0.85rem",
+                        cursor: "pointer",
+                        display: "flex",
+                        alignItems: "center",
+                        gap: "6px",
+                        boxShadow: "0 2px 4px rgba(247, 52, 12, 0.25)"
+                      }}
+                    >
+                      {sucursalIsLoading ? "Guardando..." : "Guardar Cambios"}
                     </button>
                   </div>
                 </form>

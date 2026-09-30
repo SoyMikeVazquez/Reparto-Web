@@ -221,7 +221,7 @@ const mapDbUserToDriver = (row: any): Driver => {
     }
   }
 
-  const colors = ["#F7340C", "#0d9488", "#059669", "#ec4899", "#a855f7", "#eab308"];
+  const colors = ["#F7340C", "#0f172a", "#334155", "#ef4444", "#dc2626", "#1e293b"];
   let colorIndex = 0;
   if (row.IDUser) {
     let sum = 0;
@@ -470,7 +470,7 @@ const INITIAL_DRIVERS: Driver[] = [
     speed: 0,
     rating: 4.8,
     battery: 88,
-    color: "#6366f1",
+    color: "#F7340C",
     currentRoute: [],
     routeIndex: 0,
     activeDeliveryId: undefined,
@@ -487,7 +487,7 @@ const INITIAL_DRIVERS: Driver[] = [
     speed: 0,
     rating: 4.9,
     battery: 95,
-    color: "#06b6d4",
+    color: "#0f172a",
     currentRoute: [],
     routeIndex: 0,
     idEmpresa: "emp-mock-1"
@@ -503,7 +503,7 @@ const INITIAL_DRIVERS: Driver[] = [
     speed: 0,
     rating: 4.7,
     battery: 72,
-    color: "#10b981",
+    color: "#dc2626",
     currentRoute: [],
     routeIndex: 0,
     activeDeliveryId: undefined,
@@ -1368,7 +1368,7 @@ export const DashboardProvider: React.FC<{ children: React.ReactNode }> = ({ chi
   };
 
   const addDriver = async (driver: { name: string; phone: string; vehicle: "Motocicleta" | "Bicicleta" | "Automóvil" | "Van"; modelo?: string; placas?: string; sucursales?: string[]; fotosVehiculo?: string[] }) => {
-    const colors = ["#F7340C", "#0d9488", "#059669", "#ec4899", "#a855f7", "#eab308"];
+    const colors = ["#F7340C", "#0f172a", "#334155", "#ef4444", "#dc2626", "#1e293b"];
     const randomColor = colors[Math.floor(Math.random() * colors.length)];
     const lat = 19.4250 + (Math.random() - 0.5) * 0.02;
     const lng = -99.1650 + (Math.random() - 0.5) * 0.02;

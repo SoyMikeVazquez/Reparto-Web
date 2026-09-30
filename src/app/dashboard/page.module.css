@@ -544,3 +544,18 @@
   background: rgba(0, 0, 0, 0.02);
   color: var(--text-primary);
 }
+
+/* Broker Tab Layout */
+.brokerLayout {
+  display: grid;
+  grid-template-columns: minmax(340px, 420px) 1fr;
+  gap: 24px;
+  align-items: start;
+  width: 100%;
+}
+
+@media (max-width: 1024px) {
+  .brokerLayout {
+    grid-template-columns: 1fr;
+  }
+}

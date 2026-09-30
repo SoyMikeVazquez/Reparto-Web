@@ -16,7 +16,12 @@ import {
   Store,
   ClipboardList,
   Building,
-  CreditCard
+  CreditCard,
+  DollarSign,
+  TrendingUp,
+  Percent,
+  Wallet,
+  Globe
 } from "lucide-react";
 
 interface SidebarProps {
@@ -25,17 +30,31 @@ interface SidebarProps {
   onLogout: () => void;
   superAdmin?: boolean;
   isAdmin?: boolean;
+  userRole?: string;
 }
 
-export const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab, onLogout, superAdmin: superAdminProp, isAdmin: isAdminProp }) => {
+export const Sidebar: React.FC<SidebarProps> = ({ 
+  activeTab, 
+  setActiveTab, 
+  onLogout, 
+  superAdmin: superAdminProp, 
+  isAdmin: isAdminProp,
+  userRole: userRoleProp 
+}) => {
   const [isCollapsed, setIsCollapsed] = useState(false);
   const [userName, setUserName] = useState("Admin Demo");
-  const [userRole, setUserRole] = useState("Administrador");
+  const [userRole, setUserRole] = useState(userRoleProp || "Administrador");
   const [companyName, setCompanyName] = useState("");
   const [companyLogo, setCompanyLogo] = useState("");
   const [logoError, setLogoError] = useState(false);
   const [superAdmin, setSuperAdmin] = useState(false);
   const [isAdmin, setIsAdmin] = useState(true);
+
+  useEffect(() => {
+    if (userRoleProp) {
+      setUserRole(userRoleProp);
+    }
+  }, [userRoleProp]);
 
   useEffect(() => {
     if (superAdminProp !== undefined) {
@@ -82,32 +101,48 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab, onLog
       .toUpperCase() || "AD";
   };
 
-  const showAllTabs = isAdmin && userRole !== "Repartidor";
+  const isBroker = userRole?.toLowerCase().includes("broker");
+  const isRepartidor = userRole === "Repartidor" || !isAdmin;
 
-  const navItems = [
-    { id: "overview", label: "Resumen", icon: Compass },
-    ...(showAllTabs ? [
-      { id: "orders", label: "Crear Órdenes", icon: Store }
-    ] : []),
-    { id: "deliveries", label: "Gestionar Órdenes", icon: ClipboardList },
-    ...(showAllTabs ? [
-      { id: "drivers", label: "Gestión de Repartos", icon: Truck },
-      { id: "personnel", label: "Gestionar Personal", icon: Users },
-      { id: "products", label: "Gestionar Productos", icon: Package },
-      { id: "branches", label: "Gestionar Sucursales", icon: Store },
-      { id: "payment-config", label: "Pasarelas de Pago", icon: CreditCard }
-    ] : []),
-    ...(superAdmin && showAllTabs ? [
-      { id: "create-company", label: "Crear Empresa", icon: Building },
-      { id: "super-admins", label: "Crear SuperAdmin", icon: Shield },
-      { id: "create-broker", label: "Crear Broker", icon: Users }
-    ] : []),
-  ];
+  // Determine nav items based on role: SuperAdmin -> Broker -> Repartidor -> Merchant / Cliente
+  let navItems: { id: string; label: string; icon: any }[] = [];
+
+  if (superAdmin) {
+    navItems = [
+      { id: "admin-earnings", label: "Gestor de ganancias", icon: DollarSign },
+      { id: "create-company", label: "Creador de empresas", icon: Building },
+      { id: "create-broker", label: "Creador de Brokers", icon: Users },
+      { id: "broker-earnings", label: "Gestor de ingresos de Brokers", icon: TrendingUp },
+      { id: "driver-earnings", label: "Gestor de ingresos de Repartidores", icon: Truck },
+    ];
+  } else if (isBroker) {
+    navItems = [
+      { id: "broker-my-earnings", label: "Gestión de ingresos", icon: TrendingUp },
+      { id: "broker-drivers", label: "Gestión de repartidores", icon: Truck },
+      { id: "broker-order-history", label: "Historial de pedidos", icon: ClipboardList },
+      { id: "broker-companies", label: "Gestión de sucursales", icon: Store },
+    ];
+  } else if (isRepartidor) {
+    navItems = [
+      { id: "overview", label: "Resumen", icon: Compass },
+      { id: "deliveries", label: "Gestionar Órdenes", icon: ClipboardList },
+    ];
+  } else {
+    // Cliente / Comercio (Punto de venta, productos, Pedidos enviados, Personalización de web, Sucursales, Personal)
+    navItems = [
+      { id: "orders", label: "Punto de venta", icon: Store },
+      { id: "products", label: "Productos", icon: Package },
+      { id: "deliveries", label: "Pedidos enviados", icon: ClipboardList },
+      { id: "web-customization", label: "Personalización de web", icon: Globe },
+      { id: "branches", label: "Sucursales", icon: Building },
+      { id: "personnel", label: "Personal", icon: Users },
+    ];
+  }
 
   return (
     <div className={`${styles.sidebar} ${isCollapsed ? styles.collapsed : ""}`}>
       <div className={styles.brand}>
-        {companyLogo && !logoError ? (
+        {!superAdmin && companyLogo && !logoError ? (
           <img 
             src={companyLogo} 
             alt="Logo Empresa" 
@@ -119,7 +154,9 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab, onLog
             <Shield size={24} />
           </div>
         )}
-        <span className={styles.brandName}>{companyName || "Reparto Control"}</span>
+        <span className={styles.brandName}>
+          {superAdmin ? "Reparto Global" : isBroker ? "Broker Console" : (companyName || "Reparto Control")}
+        </span>
       </div>
 
       <nav className={styles.nav}>
@@ -131,14 +168,6 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab, onLog
               key={item.id}
               onClick={() => setActiveTab(item.id)}
               className={`${styles.navLink} ${isActive ? styles.activeLink : ""}`}
-              style={(item.id === "create-company" || item.id === "super-admins") ? {
-                background: isActive ? 'var(--primary)' : 'rgba(13, 148, 136, 0.15)',
-                border: '1px solid rgba(13, 148, 136, 0.25)',
-                borderRadius: 'var(--radius-md)',
-                margin: '4px 8px',
-                color: isActive ? 'white' : 'var(--primary)',
-                boxShadow: '0 4px 12px rgba(13, 148, 136, 0.1)'
-              } : {}}
             >
               {isActive && <div className={styles.activeIndicator} />}
               <Icon size={20} />
@@ -175,3 +204,4 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab, onLog
     </div>
   );
 };
+

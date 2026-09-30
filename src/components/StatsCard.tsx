@@ -22,7 +22,7 @@ export const StatsCard: React.FC<StatsCardProps> = ({
   value,
   icon: Icon,
   trend,
-  color = "#6366f1",
+  color = "#F7340C",
   progress,
   footerText
 }) => {

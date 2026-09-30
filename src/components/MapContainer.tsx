@@ -321,7 +321,7 @@ export const MapContainer: React.FC<MapContainerProps> = ({ selectedOrderId }) =
     if (selectedOrder && hasBranchCoords && selectedOrder.lat && selectedOrder.lng) {
       // Branch marker
       const startIcon = L.divIcon({
-        html: `<div style="background: #6366f1; width: 16px; height: 16px; border: 3px solid white; border-radius: 50%; box-shadow: 0 0 10px #6366f1;"></div>`,
+        html: `<div style="background: #0f172a; width: 16px; height: 16px; border: 3px solid white; border-radius: 50%; box-shadow: 0 0 10px rgba(0,0,0,0.5);"></div>`,
         className: "",
         iconSize: [16, 16],
         iconAnchor: [8, 8]
@@ -436,7 +436,7 @@ export const MapContainer: React.FC<MapContainerProps> = ({ selectedOrderId }) =
             <strong style="font-size: 0.9rem;">${driver.name}</strong><br/>
             <span style="font-size: 0.75rem;">${driver.vehicle} • ${driver.phone}</span><br/>
             <div style="margin-top: 6px; display: flex; justify-content: space-between; align-items: center; font-size: 0.75rem;">
-              <span style="padding: 2px 6px; border-radius: 4px; font-weight:600; background: rgba(99,102,241,0.15); color: var(--primary);">${driver.status === "on_delivery" ? "En Ruta" : "Disponible"}</span>
+              <span style="padding: 2px 6px; border-radius: 4px; font-weight:600; background: rgba(247,52,12,0.12); color: var(--primary);">${driver.status === "on_delivery" ? "En Ruta" : "Disponible"}</span>
               <span>${driver.battery}% Batería</span>
             </div>
           </div>
@@ -474,7 +474,7 @@ export const MapContainer: React.FC<MapContainerProps> = ({ selectedOrderId }) =
       }
 
       const markerId = `delivery-${delivery.id}`;
-      const color = delivery.status === "pending" ? "#f59e0b" : "#6366f1"; // amber vs indigo
+      const color = delivery.status === "pending" ? "#F7340C" : "#0f172a";
 
       if (mapboxMarkersRef.current[markerId]) {
         mapboxMarkersRef.current[markerId].setLngLat([delivery.lng, delivery.lat]);
@@ -603,10 +603,10 @@ export const MapContainer: React.FC<MapContainerProps> = ({ selectedOrderId }) =
         const el = document.createElement("div");
         el.style.width = "16px";
         el.style.height = "16px";
-        el.style.backgroundColor = "#6366f1";
+        el.style.backgroundColor = "#0f172a";
         el.style.border = "3px solid white";
         el.style.borderRadius = "50%";
-        el.style.boxShadow = "0 0 10px #6366f1";
+        el.style.boxShadow = "0 0 10px rgba(0,0,0,0.5)";
         
         mapboxMarkersRef.current[startMarkerId] = new mapboxgl.Marker({ element: el })
           .setLngLat([branch.lng!, branch.lat!])

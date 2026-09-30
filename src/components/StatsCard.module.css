@@ -14,7 +14,7 @@
   right: 0;
   width: 120px;
   height: 120px;
-  background: radial-gradient(circle, var(--glow-color, rgba(99, 102, 241, 0.15)) 0%, rgba(0, 0, 0, 0) 70%);
+  background: radial-gradient(circle, var(--glow-color, rgba(247, 52, 12, 0.15)) 0%, rgba(0, 0, 0, 0) 70%);
   border-radius: 50%;
   transform: translate(30%, -30%);
   pointer-events: none;

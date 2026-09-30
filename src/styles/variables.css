@@ -13,19 +13,19 @@
   --text-secondary: #475569; /* Slate 600 */
   --text-muted: #94a3b8; /* Slate 400 */
   
-  /* Brand/Status Colors - Red Tone #F7340C */
+  /* Brand/Status Colors - White, Black, and Red Tone #F7340C */
   --primary: #F7340C; 
   --primary-glow: rgba(247, 52, 12, 0.08);
-  --secondary: #0d9488; /* Teal */
-  --secondary-glow: rgba(13, 148, 136, 0.08);
+  --secondary: #0f172a; /* Black / Slate */
+  --secondary-glow: rgba(15, 23, 42, 0.08);
   
-  --success: #059669; /* Emerald */
-  --success-glow: rgba(5, 150, 105, 0.08);
-  --warning: #d97706; /* Amber */
-  --warning-glow: rgba(217, 119, 6, 0.08);
-  --danger: #dc2626; /* Rose/Red */
+  --success: #F7340C; /* Red */
+  --success-glow: rgba(247, 52, 12, 0.08);
+  --warning: #0f172a; /* Black */
+  --warning-glow: rgba(15, 23, 42, 0.08);
+  --danger: #dc2626; /* Red */
   --danger-glow: rgba(220, 38, 38, 0.08);
-  --info: #2563eb; /* Blue */
+  --info: #0f172a; /* Black */
   
   /* Typography */
   --font-family: var(--font-geist-sans), -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;

@@ -74,7 +74,7 @@ export const OrderRouteMap: React.FC<OrderRouteMapProps> = ({ start, end, routeC
 
     // Custom icons
     const branchIcon = L.divIcon({
-      html: `<div style="background: #6366f1; width: 14px; height: 14px; border: 2.5px solid white; border-radius: 50%; box-shadow: 0 0 8px #6366f1;"></div>`,
+      html: `<div style="background: #0f172a; width: 14px; height: 14px; border: 2.5px solid white; border-radius: 50%; box-shadow: 0 0 8px rgba(0,0,0,0.5);"></div>`,
       className: "",
       iconSize: [14, 14],
       iconAnchor: [7, 7]

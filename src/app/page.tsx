@@ -747,7 +747,7 @@ export default function Login() {
                       />
                     </div>
                     {newCompanyLogo && (
-                      <div style={{ marginTop: "8px", display: "flex", alignItems: "center", gap: "10px", padding: "6px 12px", background: "var(--success-glow)", borderRadius: "var(--radius-sm)", border: "1px solid rgba(5, 150, 105, 0.15)" }}>
+                      <div style={{ marginTop: "8px", display: "flex", alignItems: "center", gap: "10px", padding: "6px 12px", background: "var(--success-glow)", borderRadius: "var(--radius-sm)", border: "1px solid rgba(247, 52, 12, 0.2)" }}>
                         <img 
                           src={newCompanyLogo} 
                           alt="Vista previa" 
