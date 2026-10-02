@@ -10,7 +10,7 @@ import { Navbar } from "../../components/Navbar";
 import { StatsCard } from "../../components/StatsCard";
 import { MapContainer } from "../../components/MapContainer";
 import { useDashboard, Order, Branch, Product, Staff, TarifaItem } from "../../context/DashboardContext";
-import { 
+import {
   MapPin, 
   Truck, 
   CheckCircle, 
@@ -46,7 +46,12 @@ import {
   Check,
   ArrowUp,
   ArrowDown,
-  Percent
+  Percent,
+  Wallet,
+  Search,
+  TrendingUp,
+  DollarSign,
+  Filter
 } from "lucide-react";
 import { OrderRouteMap } from "../../components/OrderRouteMap";
 
@@ -510,6 +515,8 @@ export default function Dashboard() {
   const [repName, setRepName] = useState("");
   const [repEmail, setRepEmail] = useState("");
   const [repPhone, setRepPhone] = useState("");
+  const [repPassword, setRepPassword] = useState("");
+  const [showRepPassword, setShowRepPassword] = useState(false);
   const [repBrokerId, setRepBrokerId] = useState("");
   const [repDriverPhotos, setRepDriverPhotos] = useState<string[]>([]);
   const [repVehiclePhotos, setRepVehiclePhotos] = useState<string[]>([]);
@@ -541,6 +548,23 @@ export default function Dashboard() {
   const [sucursalSuccess, setSucursalSuccess] = useState("");
   const [sucursalShowRawJson, setSucursalShowRawJson] = useState(false);
   const [sucursalRawJsonText, setSucursalRawJsonText] = useState("");
+
+  // Broker Fleet & Deliveries states
+  const [saDriversList, setSaDriversList] = useState<any[]>([]);
+  const [saDeliveriesList, setSaDeliveriesList] = useState<any[]>([]);
+  const [saLoadingEarnings, setSaLoadingEarnings] = useState(false);
+  const [selectedDriverForDeliveries, setSelectedDriverForDeliveries] = useState<any | null>(null);
+
+  // Broker Order History states
+  const [orderHistorySearch, setOrderHistorySearch] = useState("");
+  const [orderHistoryStatusFilter, setOrderHistoryStatusFilter] = useState("all");
+  const [orderHistoryDriverFilter, setOrderHistoryDriverFilter] = useState("all");
+  const [selectedOrderHistoryDetail, setSelectedOrderHistoryDetail] = useState<any | null>(null);
+
+  // Broker Sucursales states
+  const [brokerSucursalSearch, setBrokerSucursalSearch] = useState("");
+  const [brokerSucursalCompanyFilter, setBrokerSucursalCompanyFilter] = useState("all");
+
 
 
   // Staff edit modal states
@@ -922,6 +946,9 @@ export default function Dashboard() {
       return () => clearTimeout(timer);
     } else if (isBroker) {
       fetchBrokerSucursales();
+      fetchBrokers();
+      fetchSaCompanies();
+      fetchSaEarningsData();
     }
   }, [activeTab, isSuperAdmin, isBroker]);
 
@@ -1068,6 +1095,9 @@ export default function Dashboard() {
   useEffect(() => {
     const isRepartidor = !isAdmin || userRole === "Repartidor";
     const restrictedTabs = ["orders", "drivers", "personnel", "products", "branches", "payment-config", "create-company", "super-admins"];
+    if (isBroker && (activeTab === "overview" || !["broker-my-earnings", "broker-drivers", "broker-order-history", "broker-companies"].includes(activeTab))) {
+      setActiveTab("broker-my-earnings");
+    }
     if (isRepartidor && restrictedTabs.includes(activeTab)) {
       setActiveTab("overview");
     }
@@ -1330,6 +1360,64 @@ export default function Dashboard() {
     localStorage.removeItem("reparto_user_profile");
     await supabase.auth.signOut().catch(() => {});
     router.push("/");
+  };
+
+  
+  const fetchSaEarningsData = async () => {
+    setSaLoadingEarnings(true);
+    try {
+      // 1. Fetch real deliveries from 'deliveries' table
+      const { data: dbDeliveries, error: delivErr } = await supabase
+        .from("deliveries")
+        .select("*")
+        .order("created_at", { ascending: false });
+
+      if (!delivErr && dbDeliveries && dbDeliveries.length > 0) {
+        setSaDeliveriesList(dbDeliveries);
+      } else {
+        if (delivErr) console.warn("Deliveries fetch note:", delivErr.message);
+        const { data: dbOrders } = await supabase
+          .from("pedidos")
+          .select("*")
+          .order("created_at", { ascending: false });
+        if (dbOrders) {
+          setSaDeliveriesList(dbOrders.map((o: any) => ({
+            id: o.id || o.IDPedido,
+            id_repartidor: o.repartidorId || o.id_repartidor,
+            monto_envio: Number(o.shippingCost || o.total || 0),
+            status: o.status || "entregado",
+            created_at: o.created_at,
+            idEmpresa: o.idEmpresa
+          })));
+        }
+      }
+
+      // 2. Fetch all drivers from 'repartidores' table
+      const { data: dbDrivers, error: driversErr } = await supabase
+        .from("repartidores")
+        .select("*")
+        .order("created_at", { ascending: false });
+
+      if (!driversErr && dbDrivers) {
+        const normalized = dbDrivers.map((d: any) => ({
+          ...d,
+          id: d.id_repartidor || d.id
+        }));
+        setSaDriversList(normalized);
+      } else if (driversErr) {
+        console.warn("Error fetching repartidores table:", driversErr.message);
+        setSaDriversList([]);
+      }
+
+      // 3. Fetch brokers, companies and sucursales
+      await fetchBrokers();
+      await fetchSaCompanies();
+      await fetchBrokerSucursales();
+    } catch (err) {
+      console.warn("Error in fetchSaEarningsData:", err);
+    } finally {
+      setSaLoadingEarnings(false);
+    }
   };
 
   const fetchBrokerSucursales = async () => {
@@ -2807,6 +2895,77 @@ export default function Dashboard() {
     }
   };
 
+  const handleDeleteBroker = async (id: string, name: string, email: string) => {
+    if (!isSuperAdmin) {
+      alert("Acción no autorizada. Solo los SuperAdministradores pueden eliminar brokers.");
+      return;
+    }
+
+    const confirm = window.confirm(
+      `¿Estás seguro de que deseas eliminar permanentemente al broker "${name || email}"?\n\nEsta acción borrará al broker de la base de datos y revocará sus accesos a la plataforma.`
+    );
+    if (!confirm) return;
+
+    setBrokerIsLoading(true);
+    setBrokerError("");
+    setBrokerMessage("");
+
+    try {
+      // 1. Eliminar de la tabla brokers
+      const { error: brokerDbErr } = await supabase
+        .from("brokers")
+        .delete()
+        .eq("id", id);
+
+      if (brokerDbErr) {
+        console.warn("Could not delete from brokers table:", brokerDbErr);
+      }
+
+      // 2. Eliminar de la tabla users por IDUser o email
+      const { error: userDbErr } = await supabase
+        .from("users")
+        .delete()
+        .or(`IDUser.eq.${id},mail.eq.${(email || "").trim().toLowerCase()}`);
+
+      if (userDbErr) {
+        console.warn("Could not delete from users table:", userDbErr);
+      }
+
+      // 3. Desvincular repartidores si aplica
+      try {
+        await supabase
+          .from("repartidores")
+          .update({ id_broker: null })
+          .eq("id_broker", id);
+      } catch (rErr) {
+        console.warn("Repartidores unbind note:", rErr);
+      }
+
+      // 4. Limpiar del fallback local
+      try {
+        const localUsers = JSON.parse(localStorage.getItem("reparto_local_users") || "[]");
+        const filteredUsers = localUsers.filter((u: any) => u.IDUser !== id && u.mail !== email);
+        localStorage.setItem("reparto_local_users", JSON.stringify(filteredUsers));
+      } catch (e) {
+        console.warn("Local storage delete error:", e);
+      }
+
+      // 5. Actualizar estado local
+      setBrokersList(prev => prev.filter(b => b.id !== id));
+      if (editingBroker?.id === id) {
+        resetBrokerForm();
+      }
+
+      setBrokerMessage(`El broker "${name || email}" ha sido eliminado exitosamente.`);
+      fetchBrokers();
+    } catch (err: any) {
+      console.error("Error deleting broker:", err);
+      setBrokerError(err.message || "Error al eliminar el broker.");
+    } finally {
+      setBrokerIsLoading(false);
+    }
+  };
+
   const handleCreateBroker = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!isSuperAdmin) {
@@ -2855,14 +3014,12 @@ export default function Dashboard() {
         }
 
         // Actualizar en tabla users
-        const cleanedPhone = newBrokerPhone.trim().replace(/\D/g, "");
         const { error: userErr } = await supabase
           .from("users")
           .update({
             name: newBrokerName.trim(),
             mail: newBrokerEmail.trim().toLowerCase(),
-            phone: cleanedPhone ? Number(cleanedPhone) : null,
-            status: editBrokerStatus
+            IDEmpresa: newBrokerCompanies[0] || null
           })
           .eq("IDUser", editingBroker.id);
 
@@ -2872,6 +3029,7 @@ export default function Dashboard() {
 
         // Actualizar en fallback local
         try {
+          const cleanedPhone = newBrokerPhone.trim().replace(/\D/g, "");
           const localUsers = JSON.parse(localStorage.getItem("reparto_local_users") || "[]");
           const idx = localUsers.findIndex((u: any) => u.IDUser === editingBroker.id);
           if (idx !== -1) {
@@ -2947,16 +3105,15 @@ export default function Dashboard() {
         if (brokerErr) throw brokerErr;
 
         // Insert into users table
-        const cleanedPhone = newBrokerPhone.trim().replace(/\D/g, "");
         const { error: userErr } = await supabase.from("users").upsert({
           IDUser: newUserId,
           name: newBrokerName.trim(),
           mail: newBrokerEmail.trim().toLowerCase(),
           Rol: "Broker",
-          phone: cleanedPhone ? Number(cleanedPhone) : null,
-          status: "active",
           isAdmin: false,
-          superAdmin: false
+          superAdmin: false,
+          IDEmpresa: newBrokerCompanies[0] || null,
+          Sucursales: []
         }, { onConflict: "IDUser" });
         
         if (userErr) {
@@ -2965,6 +3122,7 @@ export default function Dashboard() {
 
         // Save locally for fallback login checks
         try {
+          const cleanedPhone = newBrokerPhone.trim().replace(/\D/g, "");
           const localUsers = JSON.parse(localStorage.getItem("reparto_local_users") || "[]");
           localUsers.push({
             IDUser: newUserId,
@@ -3008,6 +3166,8 @@ export default function Dashboard() {
     setRepName("");
     setRepEmail("");
     setRepPhone("");
+    setRepPassword("");
+    setShowRepPassword(false);
     setRepBrokerId(defaultBrokerId || "");
     setRepDriverPhotos([]);
     setRepVehiclePhotos([]);
@@ -3025,6 +3185,8 @@ export default function Dashboard() {
     setRepName(rep.name || "");
     setRepEmail(rep.email || "");
     setRepPhone(rep.phone || "");
+    setRepPassword("");
+    setShowRepPassword(false);
     setRepBrokerId(rep.broker_id || "");
     
     // Existing URLs
@@ -3045,6 +3207,8 @@ export default function Dashboard() {
   const handleCloseRepartidorModal = () => {
     setIsRepartidorModalOpen(false);
     setEditingRepartidor(null);
+    setRepPassword("");
+    setShowRepPassword(false);
     setRepError("");
     setRepSuccess("");
   };
@@ -3109,6 +3273,11 @@ export default function Dashboard() {
     e.preventDefault();
     if (!repName.trim() || !repEmail.trim()) {
       setRepError("El nombre y el correo electrónico son obligatorios.");
+      return;
+    }
+
+    if (!editingRepartidor && (!repPassword || repPassword.length < 6)) {
+      setRepError("La contraseña debe tener al menos 6 caracteres para la autenticación del repartidor.");
       return;
     }
 
@@ -3177,28 +3346,154 @@ export default function Dashboard() {
 
         if (updateErr) throw updateErr;
 
+        // Also update users table
+        try {
+          await supabase
+            .from("users")
+            .update({
+              name: repName.trim(),
+              mail: repEmail.trim().toLowerCase()
+            })
+            .eq("IDUser", targetId);
+        } catch (uErr) {
+          console.warn("User update note:", uErr);
+        }
+
+        // Update local storage fallback
+        try {
+          const localUsers = JSON.parse(localStorage.getItem("reparto_local_users") || "[]");
+          const idx = localUsers.findIndex((u: any) => u.IDUser === targetId);
+          if (idx !== -1) {
+            localUsers[idx].name = repName.trim();
+            localUsers[idx].mail = repEmail.trim().toLowerCase();
+            if (repPhone.trim()) localUsers[idx].phone = Number(repPhone.trim().replace(/\D/g, ""));
+            localStorage.setItem("reparto_local_users", JSON.stringify(localUsers));
+          }
+        } catch (lErr) {
+          console.warn("Local storage update note:", lErr);
+        }
+
         setRepSuccess(`Repartidor "${repName.trim()}" actualizado exitosamente.`);
       } else {
+        const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || "";
+        const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || "";
+
+        let newUserId = crypto.randomUUID();
+
+        // 1. Create authenticated user in Supabase Auth
+        try {
+          const response = await fetch(`${supabaseUrl}/auth/v1/signup`, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "apikey": supabaseAnonKey
+            },
+            body: JSON.stringify({
+              email: repEmail.trim().toLowerCase(),
+              password: repPassword,
+              options: {
+                data: {
+                  name: repName.trim(),
+                  role: "Repartidor"
+                }
+              }
+            })
+          });
+
+          const resData = await response.json();
+          if (response.ok && !resData.error && !resData.msg) {
+            newUserId = resData?.user?.id || resData?.id || newUserId;
+          } else {
+            const errorMsg = resData?.error_description || resData?.msg || resData?.message || resData?.error?.message;
+            if (errorMsg === "User already registered") {
+              throw new Error("El correo electrónico ya se encuentra registrado en la plataforma como usuario.");
+            } else {
+              console.warn("Supabase Auth sign up note:", errorMsg);
+            }
+          }
+        } catch (authErr: any) {
+          if (authErr.message?.includes("ya se encuentra registrado")) {
+            throw authErr;
+          }
+          console.warn("Auth signup fallback, using generated UUID:", authErr);
+        }
+
+        // 2. Insert row in repartidores table with id_repartidor = newUserId
+        const repartidorRow = {
+          id_repartidor: newUserId,
+          ...payload
+        };
+
         const { error: insertErr } = await supabase
           .from("repartidores")
-          .insert([payload]);
+          .insert([repartidorRow]);
 
         if (insertErr) throw insertErr;
 
-        setRepSuccess(`Repartidor "${repName.trim()}" registrado exitosamente.`);
+        // 3. Upsert row in users table
+        const { error: userErr } = await supabase.from("users").upsert({
+          IDUser: newUserId,
+          name: repName.trim(),
+          mail: repEmail.trim().toLowerCase(),
+          Rol: "Repartidor",
+          isAdmin: false,
+          superAdmin: false,
+          IDEmpresa: null,
+          Sucursales: []
+        }, { onConflict: "IDUser" });
+
+        if (userErr) {
+          console.warn("Users table upsert note:", userErr.message);
+        }
+
+        // 4. Save to local fallback storage
+        try {
+          const cleanedPhone = repPhone.trim().replace(/\D/g, "");
+          const localUsers = JSON.parse(localStorage.getItem("reparto_local_users") || "[]");
+          localUsers.push({
+            IDUser: newUserId,
+            name: repName.trim(),
+            mail: repEmail.trim().toLowerCase(),
+            Rol: "Repartidor",
+            phone: cleanedPhone ? Number(cleanedPhone) : null,
+            status: "active",
+            isAdmin: false,
+            superAdmin: false,
+            password: repPassword.trim()
+          });
+          localStorage.setItem("reparto_local_users", JSON.stringify(localUsers));
+        } catch (e) {
+          console.error("Local storage error:", e);
+        }
+
+        // 5. Send welcome email with login credentials
+        try {
+          await sendWelcomeEmail({
+            name: repName.trim(),
+            email: repEmail.trim().toLowerCase(),
+            role: "Repartidor",
+            password: repPassword,
+            phone: repPhone.trim()
+          });
+        } catch (emailErr) {
+          console.warn("Welcome email note:", emailErr);
+        }
+
+        setRepSuccess(`Repartidor "${repName.trim()}" registrado exitosamente como usuario autenticado.`);
       }
 
-      // Refresh broker sucursales
-      await fetchBrokerSucursales();
+      // Refresh data
+      await fetchSaEarningsData();
 
       setTimeout(() => {
         setIsRepartidorModalOpen(false);
         setEditingRepartidor(null);
+        setRepPassword("");
       }, 700);
 
     } catch (err: any) {
       console.error("Error saving repartidor:", err);
-      setRepError(err.message || "Error al guardar el repartidor en la base de datos.");
+      setRepError(err.message || "Error al guardar el repartidor.");
     } finally {
       setRepIsLoading(false);
     }
@@ -3218,7 +3513,24 @@ export default function Dashboard() {
 
       if (error) throw error;
 
-      await fetchBrokerSucursales();
+      // Also clean up from users table
+      try {
+        await supabase.from("users").delete().eq("IDUser", id);
+      } catch (uErr) {
+        console.warn("User deletion note:", uErr);
+      }
+
+      // Clean from local storage fallback
+      try {
+        const localUsers = JSON.parse(localStorage.getItem("reparto_local_users") || "[]");
+        const filtered = localUsers.filter((u: any) => u.IDUser !== id);
+        localStorage.setItem("reparto_local_users", JSON.stringify(filtered));
+      } catch (lErr) {
+        console.warn("Local users delete note:", lErr);
+      }
+
+      setSaDriversList(prev => prev.filter(d => (d.id_repartidor || d.id) !== id));
+      await fetchSaEarningsData();
     } catch (err: any) {
       console.error("Error deleting repartidor:", err);
       alert("Error al eliminar el repartidor: " + (err.message || "Inténtalo de nuevo."));
@@ -7754,8 +8066,8 @@ export default function Dashboard() {
                   <ClipboardList size={20} style={{ color: "var(--primary)" }} /> Brokers Registrados ({brokersList.length})
                 </h3>
                 
-                <div className={styles.tableContainer}>
-                  <table className={styles.table}>
+                <div className={styles.tableWrapper} style={{ width: "100%", overflowX: "auto", WebkitOverflowScrolling: "touch" }}>
+                  <table className={styles.table} style={{ minWidth: "860px" }}>
                     <thead>
                       <tr>
                         <th>Nombre</th>
@@ -7763,7 +8075,7 @@ export default function Dashboard() {
                         <th>Estado</th>
                         <th>Empresas Asoc.</th>
                         <th>Repartidores</th>
-                        <th style={{ textAlign: "right" }}>Acción</th>
+                        <th style={{ textAlign: "right", minWidth: "230px" }}>Acciones</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -7787,7 +8099,7 @@ export default function Dashboard() {
                                 fontSize: "0.72rem", 
                                 fontWeight: 700 
                               }}>
-                                Suspendido
+                                Restringido
                               </span>
                             ) : (
                               <span style={{ 
@@ -7839,19 +8151,23 @@ export default function Dashboard() {
                             </div>
                           </td>
                           <td style={{ textAlign: "right" }}>
-                            <div style={{ display: "flex", gap: "8px", justifyContent: "flex-end" }}>
+                            <div style={{ display: "flex", gap: "6px", justifyContent: "flex-end", alignItems: "center" }}>
                               <button 
                                 type="button" 
                                 onClick={() => handleEditBrokerClick(broker)}
+                                title="Editar datos del broker"
                                 style={{
                                   background: "rgba(255,255,255,0.03)",
                                   border: "1px solid var(--border-color)",
-                                  color: "var(--text-secondary)",
-                                  padding: "6px 12px",
+                                  color: "var(--text-primary)",
+                                  padding: "5px 10px",
                                   borderRadius: "var(--radius-sm)",
                                   fontSize: "0.75rem",
                                   fontWeight: 600,
                                   cursor: "pointer",
+                                  display: "inline-flex",
+                                  alignItems: "center",
+                                  gap: "4px",
                                   transition: "all 0.2s"
                                 }}
                                 onMouseEnter={(e) => {
@@ -7860,27 +8176,31 @@ export default function Dashboard() {
                                 }}
                                 onMouseLeave={(e) => {
                                   e.currentTarget.style.borderColor = "var(--border-color)";
-                                  e.currentTarget.style.color = "var(--text-secondary)";
+                                  e.currentTarget.style.color = "var(--text-primary)";
                                 }}
                               >
-                                Editar
+                                <Edit2 size={12} /> Editar
                               </button>
                               <button 
                                 type="button" 
                                 onClick={() => handleToggleBrokerStatus(broker.id, broker.name, broker.status || "active")}
+                                title={broker.status === "suspended" ? "Reactivar acceso del broker" : "Restringir acceso del broker"}
                                 style={{
                                   background: broker.status === "suspended" 
                                     ? "rgba(16, 185, 129, 0.08)" 
-                                    : "rgba(239, 68, 68, 0.06)",
+                                    : "rgba(247, 52, 12, 0.08)",
                                   border: broker.status === "suspended" 
                                     ? "1px solid rgba(16, 185, 129, 0.25)" 
-                                    : "1px solid rgba(239, 68, 68, 0.2)",
-                                  color: broker.status === "suspended" ? "#10b981" : "var(--danger)",
-                                  padding: "6px 12px",
+                                    : "1px solid rgba(247, 52, 12, 0.25)",
+                                  color: broker.status === "suspended" ? "#10b981" : "var(--primary)",
+                                  padding: "5px 10px",
                                   borderRadius: "var(--radius-sm)",
                                   fontSize: "0.75rem",
                                   fontWeight: 600,
                                   cursor: "pointer",
+                                  display: "inline-flex",
+                                  alignItems: "center",
+                                  gap: "4px",
                                   transition: "all 0.2s"
                                 }}
                                 onMouseEnter={(e) => {
@@ -7888,7 +8208,7 @@ export default function Dashboard() {
                                     e.currentTarget.style.background = "#10b981";
                                     e.currentTarget.style.color = "white";
                                   } else {
-                                    e.currentTarget.style.background = "var(--danger)";
+                                    e.currentTarget.style.background = "var(--primary)";
                                     e.currentTarget.style.color = "white";
                                   }
                                 }}
@@ -7897,12 +8217,41 @@ export default function Dashboard() {
                                     e.currentTarget.style.background = "rgba(16, 185, 129, 0.08)";
                                     e.currentTarget.style.color = "#10b981";
                                   } else {
-                                    e.currentTarget.style.background = "rgba(239, 68, 68, 0.06)";
-                                    e.currentTarget.style.color = "var(--danger)";
+                                    e.currentTarget.style.background = "rgba(247, 52, 12, 0.08)";
+                                    e.currentTarget.style.color = "var(--primary)";
                                   }
                                 }}
                               >
-                                {broker.status === "suspended" ? "Reactivar" : "Suspender"}
+                                <ShieldAlert size={12} /> {broker.status === "suspended" ? "Reactivar" : "Restringir"}
+                              </button>
+                              <button 
+                                type="button" 
+                                onClick={() => handleDeleteBroker(broker.id, broker.name, broker.email)}
+                                title="Eliminar permanentemente este broker"
+                                style={{
+                                  background: "rgba(239, 68, 68, 0.08)",
+                                  border: "1px solid rgba(239, 68, 68, 0.25)",
+                                  color: "var(--danger)",
+                                  padding: "5px 10px",
+                                  borderRadius: "var(--radius-sm)",
+                                  fontSize: "0.75rem",
+                                  fontWeight: 600,
+                                  cursor: "pointer",
+                                  display: "inline-flex",
+                                  alignItems: "center",
+                                  gap: "4px",
+                                  transition: "all 0.2s"
+                                }}
+                                onMouseEnter={(e) => {
+                                  e.currentTarget.style.background = "var(--danger)";
+                                  e.currentTarget.style.color = "white";
+                                }}
+                                onMouseLeave={(e) => {
+                                  e.currentTarget.style.background = "rgba(239, 68, 68, 0.08)";
+                                  e.currentTarget.style.color = "var(--danger)";
+                                }}
+                              >
+                                <Trash2 size={12} /> Eliminar
                               </button>
                             </div>
                           </td>
@@ -9822,6 +10171,1988 @@ export default function Dashboard() {
             </div>
           )}
 
+          {/* TAB: BROKER - INGRESOS PROPIOS (INTEGRA TODOS LOS INGRESOS DE SUS REPARTIDORES) */}
+          {activeTab === "broker-my-earnings" && isBroker && (() => {
+            const isDelivCompleted = (status?: string) => {
+              if (!status) return false;
+              const s = status.trim().toLowerCase();
+              return s === "entregada" || s === "entregado" || s === "delivered" || s === "completed" || s === "completada" || s === "completado";
+            };
+
+            // Identify logged-in broker
+            const loggedBroker = brokersList.find(b => 
+              (currentUserEmail && b.email?.toLowerCase() === currentUserEmail.toLowerCase()) ||
+              (currentUserName && b.name?.toLowerCase() === currentUserName.toLowerCase())
+            ) || brokersList[0] || {
+              id: "54ecd429-2942-469a-a5ae-c51789fc5e36",
+              name: currentUserName || "Vidal Cavazos",
+              email: currentUserEmail || "vidalcavazosbroker@gmail.com",
+              phone: "5599999999",
+              status: "active"
+            };
+
+            // Repartidores assigned to this broker
+            const myAssignedDrivers = saDriversList.filter(d => 
+              (loggedBroker?.id && String(d.broker_id) === String(loggedBroker.id)) ||
+              // Fallback if this is the only registered broker
+              (!d.broker_id && brokersList.length === 1)
+            );
+
+            // Filter drivers based on brokerSearch
+            const filteredDrivers = myAssignedDrivers.filter(d => {
+              const search = brokerSearch.trim().toLowerCase();
+              return !search ||
+                d.name?.toLowerCase().includes(search) ||
+                d.email?.toLowerCase().includes(search) ||
+                d.phone?.toString().includes(search) ||
+                d.id?.toLowerCase().includes(search);
+            });
+
+            // Deliveries executed by this broker's fleet
+            const myDriverIds = new Set(myAssignedDrivers.map(d => String(d.id)));
+            const myFleetDeliveries = saDeliveriesList.filter(del => 
+              myDriverIds.has(String(del.id_repartidor || del.repartidor_id))
+            );
+
+            // Filter deliveries based on brokerSearch and timeframe
+            const filteredDeliveries = myFleetDeliveries.filter(del => {
+              const search = brokerSearch.trim().toLowerCase();
+              const matchesSearch = !search ||
+                del.id?.toLowerCase().includes(search) ||
+                del.customer?.toLowerCase().includes(search) ||
+                del.address?.toLowerCase().includes(search) ||
+                del.status?.toLowerCase().includes(search);
+              if (!matchesSearch) return false;
+
+              if (!del.created_at && !del.created_time) return true;
+              const date = new Date(del.created_at || del.created_time);
+              if (isNaN(date.getTime())) return true;
+              const now = new Date();
+              if (brokerTimeframe === "day") {
+                return date.toDateString() === now.toDateString();
+              } else if (brokerTimeframe === "week") {
+                const diffTime = Math.abs(now.getTime() - date.getTime());
+                const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+                return diffDays <= 7;
+              } else if (brokerTimeframe === "month") {
+                return date.getMonth() === now.getMonth() && date.getFullYear() === now.getFullYear();
+              } else if (brokerTimeframe === "year") {
+                return date.getFullYear() === now.getFullYear();
+              }
+              return true;
+            });
+
+            // Calculations:
+            const totalFleetVolume = myFleetDeliveries.reduce((sum, d) => sum + (Number(d.monto_envio) || 0), 0);
+            // Universal 20% broker commission
+            const myBrokerCommission = totalFleetVolume * 0.20;
+            // 80% to repartidores
+            const myDriversEarningsTotal = totalFleetVolume * 0.80;
+            const completedCount = myFleetDeliveries.filter(d => isDelivCompleted(d.status)).length;
+
+            return (
+              <div style={{ display: "flex", flexDirection: "column", gap: "24px" }}>
+                {/* Header */}
+                <div className="glass-panel" style={{ padding: "18px 24px", borderRadius: "var(--radius-lg)", display: "flex", flexWrap: "wrap", alignItems: "center", justifyContent: "space-between", gap: "16px" }}>
+                  <div>
+                    <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+                      <h2 style={{ fontSize: "1.25rem", fontWeight: 700, margin: 0, color: "var(--text-primary)", display: "flex", alignItems: "center", gap: "8px" }}>
+                        <Wallet size={22} style={{ color: "#f59e0b" }} /> Ingresos Propios del Broker
+                      </h2>
+                      <span style={{
+                        fontSize: "0.72rem",
+                        padding: "2px 8px",
+                        borderRadius: "12px",
+                        fontWeight: 700,
+                        background: loggedBroker.status === "suspended" ? "rgba(239, 68, 68, 0.15)" : "rgba(16, 185, 129, 0.15)",
+                        color: loggedBroker.status === "suspended" ? "#ef4444" : "#10b981",
+                        border: loggedBroker.status === "suspended" ? "1px solid rgba(239, 68, 68, 0.3)" : "1px solid rgba(16, 185, 129, 0.3)"
+                      }}>
+                        {loggedBroker.status === "suspended" ? "Suspendido" : "Activo"}
+                      </span>
+                    </div>
+                    <p style={{ margin: "4px 0 0", fontSize: "0.85rem", color: "var(--text-secondary)" }}>
+                      Supervisión de entregas de tus repartidores. <strong>Comisión universal del 20%</strong> por cada delivery completado.
+                    </p>
+                  </div>
+
+                  <div style={{ display: "flex", alignItems: "center", gap: "12px", flexWrap: "wrap" }}>
+                    {/* Timeframe Selector */}
+                    <div style={{ display: "flex", background: "rgba(0,0,0,0.04)", padding: "3px", borderRadius: "var(--radius-md)", border: "1px solid var(--border-color)" }}>
+                      {(["day", "week", "month", "year"] as const).map(tf => (
+                        <button
+                          key={tf}
+                          type="button"
+                          onClick={() => setBrokerTimeframe(tf)}
+                          style={{
+                            padding: "6px 12px",
+                            border: "none",
+                            borderRadius: "var(--radius-sm)",
+                            fontSize: "0.78rem",
+                            fontWeight: 600,
+                            cursor: "pointer",
+                            background: brokerTimeframe === tf ? "var(--primary)" : "transparent",
+                            color: brokerTimeframe === tf ? "white" : "var(--text-secondary)",
+                            transition: "all 0.2s"
+                          }}
+                        >
+                          {tf === "day" ? "Hoy" : tf === "week" ? "Semana" : tf === "month" ? "Mes" : "Año"}
+                        </button>
+                      ))}
+                    </div>
+
+                    {/* Search Input */}
+                    <div style={{ position: "relative" }}>
+                      <Search size={16} style={{ position: "absolute", left: "10px", top: "50%", transform: "translateY(-50%)", color: "var(--text-muted)" }} />
+                      <input
+                        type="text"
+                        placeholder="Buscar en flota..."
+                        value={brokerSearch}
+                        onChange={(e) => setBrokerSearch(e.target.value)}
+                        style={{
+                          padding: "8px 12px 8px 32px",
+                          borderRadius: "var(--radius-md)",
+                          border: "1px solid var(--border-color)",
+                          background: "white",
+                          fontSize: "0.82rem",
+                          outline: "none"
+                        }}
+                      />
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={fetchSaEarningsData}
+                      disabled={saLoadingEarnings}
+                      style={{
+                        padding: "8px 14px",
+                        background: "var(--primary-glow)",
+                        border: "1px solid rgba(247, 52, 12, 0.2)",
+                        borderRadius: "var(--radius-md)",
+                        color: "var(--primary)",
+                        fontSize: "0.82rem",
+                        fontWeight: 600,
+                        cursor: "pointer"
+                      }}
+                    >
+                      {saLoadingEarnings ? "Cargando..." : "Actualizar"}
+                    </button>
+                  </div>
+                </div>
+
+                {/* KPI Summary Cards */}
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: "16px" }}>
+                  <div className="glass-panel" style={{ padding: "20px", borderRadius: "var(--radius-lg)", borderLeft: "4px solid #f59e0b" }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", color: "var(--text-secondary)", fontSize: "0.82rem" }}>
+                      <span>Mi Comisión Broker (20%)</span>
+                      <TrendingUp size={18} style={{ color: "#f59e0b" }} />
+                    </div>
+                    <div style={{ fontSize: "1.8rem", fontWeight: 800, color: "#f59e0b", marginTop: "6px" }}>
+                      ${myBrokerCommission.toLocaleString("es-MX", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                    </div>
+                    <span style={{ fontSize: "0.75rem", color: "var(--text-muted)", marginTop: "4px", display: "block" }}>
+                      20% universal sobre volumen de deliveries
+                    </span>
+                  </div>
+
+                  <div className="glass-panel" style={{ padding: "20px", borderRadius: "var(--radius-lg)", borderLeft: "4px solid #6366f1" }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", color: "var(--text-secondary)", fontSize: "0.82rem" }}>
+                      <span>Ingresos de Repartidores (80%)</span>
+                      <Truck size={18} style={{ color: "#6366f1" }} />
+                    </div>
+                    <div style={{ fontSize: "1.8rem", fontWeight: 800, color: "#6366f1", marginTop: "6px" }}>
+                      ${myDriversEarningsTotal.toLocaleString("es-MX", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                    </div>
+                    <span style={{ fontSize: "0.75rem", color: "var(--text-muted)", marginTop: "4px", display: "block" }}>
+                      Tarifas devengadas por tu equipo
+                    </span>
+                  </div>
+
+                  <div className="glass-panel" style={{ padding: "20px", borderRadius: "var(--radius-lg)", borderLeft: "4px solid var(--primary)" }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", color: "var(--text-secondary)", fontSize: "0.82rem" }}>
+                      <span>Volumen Bruto Envíos</span>
+                      <DollarSign size={18} style={{ color: "var(--primary)" }} />
+                    </div>
+                    <div style={{ fontSize: "1.8rem", fontWeight: 800, color: "var(--text-primary)", marginTop: "6px" }}>
+                      ${totalFleetVolume.toLocaleString("es-MX", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                    </div>
+                    <span style={{ fontSize: "0.75rem", color: "var(--text-muted)", marginTop: "4px", display: "block" }}>
+                      Total cobrado en servicios de entrega
+                    </span>
+                  </div>
+
+                  <div className="glass-panel" style={{ padding: "20px", borderRadius: "var(--radius-lg)", borderLeft: "4px solid #10b981" }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", color: "var(--text-secondary)", fontSize: "0.82rem" }}>
+                      <span>Deliveries Coordinados</span>
+                      <Package size={18} style={{ color: "#10b981" }} />
+                    </div>
+                    <div style={{ fontSize: "1.8rem", fontWeight: 800, color: "#10b981", marginTop: "6px" }}>
+                      {myFleetDeliveries.length}
+                    </div>
+                    <span style={{ fontSize: "0.75rem", color: "var(--text-muted)", marginTop: "4px", display: "block" }}>
+                      {completedCount} entregados con éxito
+                    </span>
+                  </div>
+
+                  <div className="glass-panel" style={{ padding: "20px", borderRadius: "var(--radius-lg)", borderLeft: "4px solid #3b82f6" }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", color: "var(--text-secondary)", fontSize: "0.82rem" }}>
+                      <span>Repartidores en Flota</span>
+                      <Users size={18} style={{ color: "#3b82f6" }} />
+                    </div>
+                    <div style={{ fontSize: "1.8rem", fontWeight: 800, color: "var(--text-primary)", marginTop: "6px" }}>
+                      {myAssignedDrivers.length}
+                    </div>
+                    <span style={{ fontSize: "0.75rem", color: "var(--text-muted)", marginTop: "4px", display: "block" }}>
+                      Conductores asignados a tu red
+                    </span>
+                  </div>
+                </div>
+
+                {/* Sub-tab view mode toggler */}
+                <div style={{ display: "flex", gap: "8px", borderBottom: "1px solid var(--border-color)", paddingBottom: "12px" }}>
+                  <button
+                    type="button"
+                    onClick={() => setBrokerViewMode("drivers")}
+                    style={{
+                      padding: "8px 16px",
+                      borderRadius: "var(--radius-md)",
+                      border: "none",
+                      fontSize: "0.85rem",
+                      fontWeight: 600,
+                      cursor: "pointer",
+                      display: "flex",
+                      alignItems: "center",
+                      gap: "6px",
+                      background: brokerViewMode === "drivers" ? "var(--primary)" : "rgba(0,0,0,0.05)",
+                      color: brokerViewMode === "drivers" ? "white" : "var(--text-secondary)",
+                      transition: "all 0.2s"
+                    }}
+                  >
+                    <Truck size={16} /> Ingresos por Repartidor ({myAssignedDrivers.length})
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setBrokerViewMode("deliveries")}
+                    style={{
+                      padding: "8px 16px",
+                      borderRadius: "var(--radius-md)",
+                      border: "none",
+                      fontSize: "0.85rem",
+                      fontWeight: 600,
+                      cursor: "pointer",
+                      display: "flex",
+                      alignItems: "center",
+                      gap: "6px",
+                      background: brokerViewMode === "deliveries" ? "var(--primary)" : "rgba(0,0,0,0.05)",
+                      color: brokerViewMode === "deliveries" ? "white" : "var(--text-secondary)",
+                      transition: "all 0.2s"
+                    }}
+                  >
+                    <Package size={16} /> Historial de Deliveries ({myFleetDeliveries.length})
+                  </button>
+                </div>
+
+                {/* VIEW 1: DRIVERS TABLE */}
+                {brokerViewMode === "drivers" && (
+                  <div className={`glass-panel ${styles.tableCard}`} style={{ padding: "20px", borderRadius: "var(--radius-lg)" }}>
+                    <div className={styles.sectionHeader} style={{ marginBottom: "16px" }}>
+                      <h3 className={styles.sectionTitle} style={{ margin: 0 }}>Desglose de Ganancias por Repartidor</h3>
+                      <span style={{ fontSize: "0.8rem", color: "var(--text-muted)" }}>
+                        {filteredDrivers.length} repartidores encontrados
+                      </span>
+                    </div>
+
+                    <div className={styles.tableWrapper}>
+                      <table className={styles.table}>
+                        <thead>
+                          <tr>
+                            <th>Repartidor</th>
+                            <th>Contacto</th>
+                            <th>Deliveries Asignados</th>
+                            <th>Volumen Generado</th>
+                            <th>Ingreso Repartidor (80%)</th>
+                            <th>Mi Comisión Broker (20%)</th>
+                            <th>Estado</th>
+                            <th style={{ textAlign: "right" }}>Acción</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {filteredDrivers.map(driver => {
+                            const dDeliveries = saDeliveriesList.filter(del => 
+                              String(del.id_repartidor || del.repartidor_id) === String(driver.id)
+                            );
+                            const dVolume = dDeliveries.reduce((sum, del) => sum + (Number(del.monto_envio) || 0), 0);
+                            const dDriverEarnings = dVolume * 0.80;
+                            const dBrokerComm = dVolume * 0.20;
+                            const dCompleted = dDeliveries.filter(del => isDelivCompleted(del.status)).length;
+                            const dActive = dDeliveries.length - dCompleted;
+
+                            return (
+                              <tr key={driver.id}>
+                                <td>
+                                  <div style={{ fontWeight: 600, color: "var(--text-primary)" }}>{driver.name || driver.email || "Repartidor"}</div>
+                                  <div style={{ fontSize: "0.72rem", color: "var(--text-muted)", fontFamily: "var(--font-mono)" }}>
+                                    ID: {driver.id ? String(driver.id).slice(0, 8) + "..." : "N/A"}
+                                  </div>
+                                </td>
+                                <td>
+                                  <div style={{ fontSize: "0.82rem", color: "var(--text-primary)" }}>{driver.email || driver.mail || "Sin email"}</div>
+                                  <div style={{ fontSize: "0.75rem", color: "var(--text-muted)" }}>{driver.phone || "Sin teléfono"}</div>
+                                </td>
+                                <td>
+                                  <div style={{ display: "flex", flexDirection: "column", gap: "2px" }}>
+                                    <span style={{ fontWeight: 600, fontSize: "0.82rem" }}>
+                                      {dDeliveries.length} {dDeliveries.length === 1 ? "envío" : "envíos"}
+                                    </span>
+                                    <div style={{ display: "flex", gap: "4px" }}>
+                                      <span style={{ fontSize: "0.7rem", color: "#10b981", background: "rgba(16, 185, 129, 0.1)", padding: "1px 5px", borderRadius: "3px" }}>
+                                        {dCompleted} listos
+                                      </span>
+                                      {dActive > 0 && (
+                                        <span style={{ fontSize: "0.7rem", color: "#6366f1", background: "rgba(99, 102, 241, 0.1)", padding: "1px 5px", borderRadius: "3px" }}>
+                                          {dActive} activos
+                                        </span>
+                                      )}
+                                    </div>
+                                  </div>
+                                </td>
+                                <td style={{ fontWeight: 600, color: "var(--text-primary)" }}>
+                                  ${dVolume.toLocaleString("es-MX", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                </td>
+                                <td style={{ fontWeight: 600, color: "#6366f1" }}>
+                                  ${dDriverEarnings.toLocaleString("es-MX", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                </td>
+                                <td style={{ fontWeight: 700, color: "#f59e0b", fontSize: "0.95rem" }}>
+                                  ${dBrokerComm.toLocaleString("es-MX", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                </td>
+                                <td>
+                                  <span style={{
+                                    fontSize: "0.72rem",
+                                    padding: "3px 8px",
+                                    borderRadius: "10px",
+                                    fontWeight: 600,
+                                    background: "rgba(16, 185, 129, 0.12)",
+                                    color: "#10b981"
+                                  }}>
+                                    Activo
+                                  </span>
+                                </td>
+                                <td style={{ textAlign: "right" }}>
+                                  <button
+                                    type="button"
+                                    onClick={() => setSelectedDriverForDeliveries(driver)}
+                                    style={{
+                                      padding: "5px 10px",
+                                      background: "rgba(255, 255, 255, 0.04)",
+                                      border: "1px solid var(--border-color)",
+                                      borderRadius: "var(--radius-sm)",
+                                      color: "var(--text-primary)",
+                                      fontSize: "0.72rem",
+                                      fontWeight: 600,
+                                      cursor: "pointer",
+                                      display: "inline-flex",
+                                      alignItems: "center",
+                                      gap: "4px"
+                                    }}
+                                  >
+                                    Ver Envíos ({dDeliveries.length})
+                                  </button>
+                                </td>
+                              </tr>
+                            );
+                          })}
+                          {filteredDrivers.length === 0 && (
+                            <tr>
+                              <td colSpan={8} style={{ textAlign: "center", padding: "28px", color: "var(--text-muted)" }}>
+                                {myAssignedDrivers.length === 0 
+                                  ? "No tienes repartidores vinculados a tu flota de Broker actualmente. En 'Gestión de repartidores' puedes consultar tu equipo o solicitar altas al SuperAdmin."
+                                  : "No se encontraron repartidores con el término de búsqueda proporcionado."}
+                              </td>
+                            </tr>
+                          )}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                )}
+
+                {/* VIEW 2: DELIVERIES TABLE */}
+                {brokerViewMode === "deliveries" && (
+                  <div className={`glass-panel ${styles.tableCard}`} style={{ padding: "20px", borderRadius: "var(--radius-lg)" }}>
+                    <div className={styles.sectionHeader} style={{ marginBottom: "16px" }}>
+                      <h3 className={styles.sectionTitle} style={{ margin: 0 }}>Historial de Deliveries Coordinados</h3>
+                      <span style={{ fontSize: "0.8rem", color: "var(--text-muted)" }}>
+                        {filteredDeliveries.length} entregas registradas
+                      </span>
+                    </div>
+
+                    <div className={styles.tableWrapper}>
+                      <table className={styles.table}>
+                        <thead>
+                          <tr>
+                            <th>Folio / ID</th>
+                            <th>Repartidor</th>
+                            <th>Cliente / Destino</th>
+                            <th>Monto Envío</th>
+                            <th>Pago Repartidor (80%)</th>
+                            <th>Mi Comisión (20%)</th>
+                            <th>Estado</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {filteredDeliveries.map((del: any) => {
+                            const dDriver = myAssignedDrivers.find(dr => String(dr.id) === String(del.id_repartidor || del.repartidor_id));
+                            const fee = Number(del.monto_envio) || 0;
+                            const comm = fee * 0.20;
+                            const driverPay = fee * 0.80;
+                            const completed = isDelivCompleted(del.status);
+
+                            return (
+                              <tr key={del.id}>
+                                <td style={{ fontFamily: "var(--font-mono)", fontSize: "0.75rem", fontWeight: 600 }}>
+                                  {del.id ? String(del.id).slice(0, 8) + "..." : "N/A"}
+                                </td>
+                                <td>
+                                  <div style={{ fontWeight: 600, fontSize: "0.82rem" }}>
+                                    {dDriver?.name || "Repartidor"}
+                                  </div>
+                                </td>
+                                <td>
+                                  <div style={{ fontWeight: 500, fontSize: "0.82rem" }}>{del.customer || "Cliente"}</div>
+                                  <div style={{ fontSize: "0.72rem", color: "var(--text-muted)" }}>{del.address || "Dirección no provista"}</div>
+                                </td>
+                                <td style={{ fontWeight: 600, color: "var(--text-primary)" }}>
+                                  ${fee.toLocaleString("es-MX", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                </td>
+                                <td style={{ fontWeight: 600, color: "#6366f1" }}>
+                                  ${driverPay.toLocaleString("es-MX", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                </td>
+                                <td style={{ fontWeight: 700, color: "#f59e0b" }}>
+                                  ${comm.toLocaleString("es-MX", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                </td>
+                                <td>
+                                  <span style={{
+                                    fontSize: "0.72rem",
+                                    padding: "2px 8px",
+                                    borderRadius: "4px",
+                                    fontWeight: 600,
+                                    background: completed ? "rgba(16, 185, 129, 0.12)" : "rgba(99, 102, 241, 0.12)",
+                                    color: completed ? "#10b981" : "#6366f1"
+                                  }}>
+                                    {del.status || "registrado"}
+                                  </span>
+                                </td>
+                              </tr>
+                            );
+                          })}
+                          {filteredDeliveries.length === 0 && (
+                            <tr>
+                              <td colSpan={7} style={{ textAlign: "center", padding: "28px", color: "var(--text-muted)" }}>
+                                No se encontraron entregas de deliveries para los filtros seleccionados.
+                              </td>
+                            </tr>
+                          )}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                )}
+
+                {/* Modal: Detalle de Envíos del Repartidor */}
+                {selectedDriverForDeliveries && (
+                  <div style={{
+                    position: "fixed",
+                    top: 0,
+                    left: 0,
+                    right: 0,
+                    bottom: 0,
+                    background: "rgba(0,0,0,0.5)",
+                    backdropFilter: "blur(4px)",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    zIndex: 9999,
+                    padding: "20px"
+                  }}>
+                    <div className="glass-panel" style={{
+                      width: "100%",
+                      maxWidth: "850px",
+                      maxHeight: "85vh",
+                      background: "white",
+                      borderRadius: "var(--radius-lg)",
+                      boxShadow: "0 20px 25px -5px rgba(0, 0, 0, 0.2)",
+                      display: "flex",
+                      flexDirection: "column",
+                      overflow: "hidden"
+                    }}>
+                      <div style={{ padding: "20px 24px", borderBottom: "1px solid var(--border-color)", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                        <div>
+                          <h3 style={{ margin: 0, fontSize: "1.15rem", fontWeight: 700, color: "var(--text-primary)", display: "flex", alignItems: "center", gap: "8px" }}>
+                            <Truck size={20} style={{ color: "var(--primary)" }} /> Envíos de {selectedDriverForDeliveries.name || selectedDriverForDeliveries.email}
+                          </h3>
+                          <p style={{ margin: "4px 0 0", fontSize: "0.8rem", color: "var(--text-muted)" }}>
+                            Registros de deliveries asignados a id_repartidor: {selectedDriverForDeliveries.id}
+                          </p>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => setSelectedDriverForDeliveries(null)}
+                          style={{ background: "transparent", border: "none", fontSize: "1.2rem", cursor: "pointer", color: "var(--text-muted)" }}
+                        >
+                          ✕
+                        </button>
+                      </div>
+
+                      <div style={{ padding: "20px 24px", overflowY: "auto", flexGrow: 1 }}>
+                        {(() => {
+                          const list = saDeliveriesList.filter(d => 
+                            (d.id_repartidor && d.id_repartidor === selectedDriverForDeliveries.id) ||
+                            (d.repartidor_id && d.repartidor_id === selectedDriverForDeliveries.id)
+                          );
+                          return (
+                            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.82rem", textAlign: "left" }}>
+                              <thead>
+                                <tr style={{ borderBottom: "1px solid var(--border-color)" }}>
+                                  <th style={{ padding: "8px" }}>ID Entrega</th>
+                                  <th style={{ padding: "8px" }}>Cliente</th>
+                                  <th style={{ padding: "8px" }}>Dirección</th>
+                                  <th style={{ padding: "8px" }}>Monto Envío</th>
+                                  <th style={{ padding: "8px" }}>Mi Comisión (20%)</th>
+                                  <th style={{ padding: "8px" }}>Estado</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {list.map((del: any) => {
+                                  const fee = Number(del.monto_envio) || 0;
+                                  return (
+                                    <tr key={del.id} style={{ borderBottom: "1px solid var(--border-color)" }}>
+                                      <td style={{ padding: "8px", fontFamily: "var(--font-mono)", fontSize: "0.75rem" }}>
+                                        {del.id?.slice(0, 8)}...
+                                      </td>
+                                      <td style={{ padding: "8px", fontWeight: 600 }}>{del.customer || "Cliente"}</td>
+                                      <td style={{ padding: "8px", color: "var(--text-muted)", fontSize: "0.78rem" }}>{del.address || "N/A"}</td>
+                                      <td style={{ padding: "8px", fontWeight: 600 }}>
+                                        ${fee.toLocaleString("es-MX", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                      </td>
+                                      <td style={{ padding: "8px", fontWeight: 700, color: "#f59e0b" }}>
+                                        ${(fee * 0.20).toLocaleString("es-MX", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                      </td>
+                                      <td style={{ padding: "8px" }}>
+                                        <span style={{
+                                          padding: "2px 6px",
+                                          borderRadius: "3px",
+                                          fontSize: "0.72rem",
+                                          fontWeight: 600,
+                                          background: isDelivCompleted(del.status) ? "rgba(16, 185, 129, 0.12)" : "rgba(99, 102, 241, 0.12)",
+                                          color: isDelivCompleted(del.status) ? "#10b981" : "#6366f1"
+                                        }}>
+                                          {del.status || "registrado"}
+                                        </span>
+                                      </td>
+                                    </tr>
+                                  );
+                                })}
+                                {list.length === 0 && (
+                                  <tr>
+                                    <td colSpan={6} style={{ padding: "20px", textAlign: "center", color: "var(--text-muted)" }}>
+                                      No hay envíos registrados para este repartidor.
+                                    </td>
+                                  </tr>
+                                )}
+                              </tbody>
+                            </table>
+                          );
+                        })()}
+                      </div>
+
+                      <div style={{ padding: "14px 24px", borderTop: "1px solid var(--border-color)", display: "flex", justifyContent: "flex-end" }}>
+                        <button
+                          type="button"
+                          onClick={() => setSelectedDriverForDeliveries(null)}
+                          style={{
+                            padding: "8px 16px",
+                            background: "rgba(0,0,0,0.05)",
+                            border: "1px solid var(--border-color)",
+                            borderRadius: "var(--radius-md)",
+                            fontSize: "0.82rem",
+                            fontWeight: 600,
+                            cursor: "pointer"
+                          }}
+                        >
+                          Cerrar
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+            );
+          })()}
+
+{/* TAB: BROKER - GESTIÓN DE REPARTIDORES */}
+          {activeTab === "broker-drivers" && isBroker && (() => {
+            const loggedBroker = brokersList.find(b => 
+              (currentUserEmail && b.email?.toLowerCase() === currentUserEmail.toLowerCase()) ||
+              (currentUserName && b.name?.toLowerCase() === currentUserName.toLowerCase())
+            ) || brokersList[0];
+
+            const myDrivers = saDriversList.filter(d => 
+              (loggedBroker?.id && String(d.broker_id) === String(loggedBroker.id)) ||
+              (!d.broker_id && brokersList.length === 1)
+            );
+
+            return (
+              <div style={{ display: "flex", flexDirection: "column", gap: "24px" }}>
+                <div className="glass-panel" style={{ padding: "18px 24px", borderRadius: "var(--radius-lg)", display: "flex", flexWrap: "wrap", alignItems: "center", justifyContent: "space-between", gap: "16px" }}>
+                  <div>
+                    <h2 style={{ fontSize: "1.25rem", fontWeight: 700, margin: 0, color: "var(--text-primary)", display: "flex", alignItems: "center", gap: "8px" }}>
+                      <Truck size={22} style={{ color: "var(--primary)" }} /> Gestión de Repartidores de la Red
+                    </h2>
+                    <p style={{ margin: "4px 0 0", fontSize: "0.85rem", color: "var(--text-secondary)" }}>
+                      Conductores y repartidores registrados bajo la supervisión de tu cuenta de Broker.
+                    </p>
+                  </div>
+                  <div style={{ display: "flex", gap: "10px", alignItems: "center" }}>
+                    <button
+                      type="button"
+                      onClick={() => handleOpenCreateRepartidor(loggedBroker?.id)}
+                      style={{
+                        padding: "8px 16px",
+                        background: "var(--primary)",
+                        border: "none",
+                        borderRadius: "var(--radius-md)",
+                        color: "#ffffff",
+                        fontSize: "0.82rem",
+                        fontWeight: 600,
+                        cursor: "pointer",
+                        display: "flex",
+                        alignItems: "center",
+                        gap: "6px",
+                        boxShadow: "0 2px 4px rgba(247, 52, 12, 0.25)"
+                      }}
+                    >
+                      <Plus size={16} /> Registrar Repartidor
+                    </button>
+                    <button
+                      type="button"
+                      onClick={fetchSaEarningsData}
+                      style={{
+                        padding: "8px 14px",
+                        background: "rgba(0, 0, 0, 0.04)",
+                        border: "1px solid var(--border-color)",
+                        borderRadius: "var(--radius-md)",
+                        color: "var(--text-primary)",
+                        fontSize: "0.82rem",
+                        fontWeight: 600,
+                        cursor: "pointer"
+                      }}
+                    >
+                      Actualizar
+                    </button>
+                  </div>
+                </div>
+
+                <div className={`glass-panel ${styles.tableCard}`} style={{ padding: "20px", borderRadius: "var(--radius-lg)" }}>
+                  <div className={styles.tableWrapper}>
+                    <table className={styles.table}>
+                      <thead>
+                        <tr>
+                          <th>Repartidor</th>
+                          <th>Contacto</th>
+                          <th>Teléfono</th>
+                          <th>Fotos</th>
+                          <th>Entregas Realizadas</th>
+                          <th>Estado Operativo</th>
+                          <th style={{ textAlign: "right" }}>Acciones</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {myDrivers.map(d => {
+                          const dDeliveries = saDeliveriesList.filter(del => 
+                            String(del.id_repartidor || del.repartidor_id) === String(d.id_repartidor || d.id)
+                          );
+                          const driverPhotosCount = Array.isArray(d.driver_photos) ? d.driver_photos.length : 0;
+                          const vehiclePhotosCount = Array.isArray(d.vehicle_photos) ? d.vehicle_photos.length : 0;
+                          const totalPhotos = driverPhotosCount + vehiclePhotosCount;
+
+                          return (
+                            <tr key={d.id_repartidor || d.id}>
+                              <td>
+                                <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+                                  {driverPhotosCount > 0 ? (
+                                    <img
+                                      src={d.driver_photos[0]}
+                                      alt={d.name || "Repartidor"}
+                                      onClick={() => setViewingRepartidorGallery(d)}
+                                      style={{
+                                        width: "38px",
+                                        height: "38px",
+                                        borderRadius: "50%",
+                                        objectFit: "cover",
+                                        border: "2px solid var(--border-color)",
+                                        cursor: "pointer",
+                                        flexShrink: 0
+                                      }}
+                                      title="Clic para ver galería"
+                                    />
+                                  ) : (
+                                    <div style={{
+                                      width: "38px",
+                                      height: "38px",
+                                      borderRadius: "50%",
+                                      background: "rgba(0, 0, 0, 0.05)",
+                                      border: "1px solid var(--border-color)",
+                                      display: "flex",
+                                      alignItems: "center",
+                                      justifyContent: "center",
+                                      fontWeight: 700,
+                                      color: "var(--text-primary)",
+                                      fontSize: "0.85rem",
+                                      flexShrink: 0
+                                    }}>
+                                      {(d.name || "R").charAt(0).toUpperCase()}
+                                    </div>
+                                  )}
+                                  <div>
+                                    <div style={{ fontWeight: 600, color: "var(--text-primary)" }}>{d.name || d.email || "Repartidor"}</div>
+                                    <div style={{ fontSize: "0.72rem", color: "var(--text-muted)", fontFamily: "var(--font-mono)" }}>
+                                      ID: {d.id_repartidor ? String(d.id_repartidor).slice(0, 8) + "..." : (d.id ? String(d.id).slice(0, 8) + "..." : "N/A")}
+                                    </div>
+                                  </div>
+                                </div>
+                              </td>
+                              <td style={{ fontSize: "0.82rem" }}>{d.email || d.mail || "Sin email"}</td>
+                              <td style={{ fontSize: "0.82rem", color: "var(--text-secondary)" }}>{d.phone || "Sin teléfono"}</td>
+                              <td>
+                                <button
+                                  type="button"
+                                  onClick={() => setViewingRepartidorGallery(d)}
+                                  title="Ver fotos del repartidor y su vehículo"
+                                  style={{
+                                    display: "inline-flex",
+                                    alignItems: "center",
+                                    gap: "5px",
+                                    padding: "4px 8px",
+                                    fontSize: "0.72rem",
+                                    fontWeight: 600,
+                                    background: totalPhotos > 0 ? "rgba(247, 52, 12, 0.08)" : "rgba(0,0,0,0.04)",
+                                    border: totalPhotos > 0 ? "1px solid rgba(247, 52, 12, 0.2)" : "1px solid var(--border-color)",
+                                    color: totalPhotos > 0 ? "var(--primary)" : "var(--text-muted)",
+                                    borderRadius: "var(--radius-sm)",
+                                    cursor: "pointer"
+                                  }}
+                                >
+                                  <ImageIcon size={13} />
+                                  <span>{totalPhotos} {totalPhotos === 1 ? "foto" : "fotos"}</span>
+                                </button>
+                              </td>
+                              <td style={{ fontWeight: 600 }}>{dDeliveries.length} entregas</td>
+                              <td>
+                                <span style={{
+                                  fontSize: "0.72rem",
+                                  padding: "3px 8px",
+                                  borderRadius: "10px",
+                                  fontWeight: 600,
+                                  background: "rgba(16, 185, 129, 0.12)",
+                                  color: "#10b981"
+                                }}>
+                                  Activo en Red
+                                </span>
+                              </td>
+                              <td style={{ textAlign: "right" }}>
+                                <div style={{ display: "flex", gap: "6px", justifyContent: "flex-end" }}>
+                                  <button
+                                    type="button"
+                                    onClick={() => handleOpenEditRepartidor(d)}
+                                    title="Editar repartidor"
+                                    style={{
+                                      padding: "5px 10px",
+                                      background: "rgba(0, 0, 0, 0.04)",
+                                      border: "1px solid var(--border-color)",
+                                      borderRadius: "var(--radius-sm)",
+                                      color: "var(--text-primary)",
+                                      fontSize: "0.75rem",
+                                      fontWeight: 600,
+                                      cursor: "pointer",
+                                      display: "inline-flex",
+                                      alignItems: "center",
+                                      gap: "4px"
+                                    }}
+                                  >
+                                    <Edit2 size={12} /> Editar
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => handleDeleteRepartidor(d.id_repartidor || d.id, d.name)}
+                                    title="Eliminar repartidor"
+                                    style={{
+                                      padding: "5px 10px",
+                                      background: "rgba(247, 52, 12, 0.08)",
+                                      border: "1px solid rgba(247, 52, 12, 0.2)",
+                                      borderRadius: "var(--radius-sm)",
+                                      color: "var(--primary)",
+                                      fontSize: "0.75rem",
+                                      fontWeight: 600,
+                                      cursor: "pointer",
+                                      display: "inline-flex",
+                                      alignItems: "center",
+                                      gap: "4px"
+                                    }}
+                                  >
+                                    <Trash2 size={12} /> Eliminar
+                                  </button>
+                                </div>
+                              </td>
+                            </tr>
+                          );
+                        })}
+                        {myDrivers.length === 0 && (
+                          <tr>
+                            <td colSpan={7} style={{ textAlign: "center", padding: "36px 20px", color: "var(--text-muted)" }}>
+                              <Truck size={36} style={{ color: "var(--text-muted)", margin: "0 auto 12px", display: "block", opacity: 0.4 }} />
+                              <div style={{ fontWeight: 600, color: "var(--text-primary)", marginBottom: "4px" }}>
+                                Aún no tienes repartidores registrados en tu flota.
+                              </div>
+                              <p style={{ margin: "0 0 16px", fontSize: "0.82rem" }}>
+                                Puedes dar de alta conductores con su cuenta autenticada para que empiecen a recibir y entregar pedidos.
+                              </p>
+                              <button
+                                type="button"
+                                onClick={() => handleOpenCreateRepartidor(loggedBroker?.id)}
+                                style={{
+                                  padding: "8px 18px",
+                                  background: "var(--primary)",
+                                  border: "none",
+                                  borderRadius: "var(--radius-md)",
+                                  color: "#ffffff",
+                                  fontSize: "0.82rem",
+                                  fontWeight: 600,
+                                  cursor: "pointer",
+                                  display: "inline-flex",
+                                  alignItems: "center",
+                                  gap: "6px"
+                                }}
+                              >
+                                <Plus size={16} /> Registrar Primer Repartidor
+                              </button>
+                            </td>
+                          </tr>
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              </div>
+            );
+          })()}
+
+          {/* TAB: BROKER - HISTORIAL DE PEDIDOS */}
+          {(activeTab === "broker-order-history" || activeTab === "broker-tariffs") && isBroker && (() => {
+            const loggedBroker = brokersList.find(b => 
+              (currentUserEmail && b.email?.toLowerCase() === currentUserEmail.toLowerCase()) ||
+              (currentUserName && b.name?.toLowerCase() === currentUserName.toLowerCase())
+            ) || brokersList[0];
+
+            const assignedCompanyIds: string[] = loggedBroker?.empresas_asociadas || [];
+            const myAssignedDrivers = saDriversList.filter(d => 
+              (loggedBroker?.id && String(d.broker_id) === String(loggedBroker.id)) ||
+              (!d.broker_id && brokersList.length === 1)
+            );
+            const myDriverIds = myAssignedDrivers.map(d => String(d.id_repartidor || d.id));
+
+            // Filter deliveries related to this broker's drivers or assigned companies
+            const brokerDeliveries = saDeliveriesList.filter(del => {
+              const driverMatch = (del.id_repartidor && myDriverIds.includes(String(del.id_repartidor))) ||
+                                  (del.repartidor_id && myDriverIds.includes(String(del.repartidor_id)));
+              const companyMatch = del.idEmpresa && assignedCompanyIds.includes(String(del.idEmpresa));
+              if (myDriverIds.length === 0 && assignedCompanyIds.length === 0) {
+                return true;
+              }
+              return driverMatch || companyMatch;
+            });
+
+            // Status classifier
+            const classifyStatus = (statusStr: string) => {
+              const s = (statusStr || "").toLowerCase();
+              if (s === "delivered" || s === "entregado" || s === "completada" || s === "completado") return "completed";
+              if (s === "transit" || s === "assigned" || s === "en_camino" || s === "en_transito") return "transit";
+              if (s === "cancelled" || s === "cancelado" || s === "cancelada") return "cancelled";
+              return "pending";
+            };
+
+            // Apply search and filters
+            const filteredDeliveries = brokerDeliveries.filter(del => {
+              // Status filter
+              if (orderHistoryStatusFilter !== "all") {
+                const c = classifyStatus(del.status);
+                if (orderHistoryStatusFilter !== c) return false;
+              }
+
+              // Driver filter
+              if (orderHistoryDriverFilter !== "all") {
+                const dId = String(del.id_repartidor || del.repartidor_id || "");
+                if (dId !== orderHistoryDriverFilter) return false;
+              }
+
+              // Search text
+              if (orderHistorySearch.trim()) {
+                const q = orderHistorySearch.toLowerCase();
+                const dDriver = myAssignedDrivers.find(dr => String(dr.id) === String(del.id_repartidor || del.repartidor_id));
+                const dComp = superAdminCompanies.find(c => String(c.idEmpresa) === String(del.idEmpresa));
+                const matchId = String(del.id || "").toLowerCase().includes(q);
+                const matchCustomer = String(del.customer || "").toLowerCase().includes(q);
+                const matchAddress = String(del.address || "").toLowerCase().includes(q);
+                const matchDriver = dDriver ? (dDriver.name?.toLowerCase().includes(q) || dDriver.email?.toLowerCase().includes(q)) : false;
+                const matchComp = dComp ? dComp.nombreEmpresa?.toLowerCase().includes(q) : false;
+                if (!matchId && !matchCustomer && !matchAddress && !matchDriver && !matchComp) {
+                  return false;
+                }
+              }
+
+              return true;
+            });
+
+            // Financial KPIs
+            const totalOrdersCount = brokerDeliveries.length;
+            const completedCount = brokerDeliveries.filter(d => classifyStatus(d.status) === "completed").length;
+            const transitCount = brokerDeliveries.filter(d => classifyStatus(d.status) === "transit").length;
+            const totalShippingSum = brokerDeliveries.reduce((sum, d) => sum + (Number(d.monto_envio) || 0), 0);
+            const totalBrokerCommission = totalShippingSum * 0.20;
+
+            const formatCurrency = (val: number) => {
+              return "$" + val.toLocaleString("es-MX", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+            };
+
+            const formatDate = (dateStr: any) => {
+              if (!dateStr) return "N/A";
+              try {
+                const d = new Date(dateStr);
+                if (isNaN(d.getTime())) return String(dateStr);
+                return d.toLocaleDateString("es-MX", { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" });
+              } catch {
+                return String(dateStr);
+              }
+            };
+
+            return (
+              <div style={{ display: "flex", flexDirection: "column", gap: "24px" }}>
+                {/* Header panel */}
+                <div className="glass-panel" style={{ padding: "18px 24px", borderRadius: "var(--radius-lg)", display: "flex", flexWrap: "wrap", alignItems: "center", justifyContent: "space-between", gap: "16px" }}>
+                  <div>
+                    <h2 style={{ fontSize: "1.25rem", fontWeight: 700, margin: 0, color: "var(--text-primary)", display: "flex", alignItems: "center", gap: "8px" }}>
+                      <ClipboardList size={22} style={{ color: "var(--primary)" }} /> Historial de Pedidos y Entregas
+                    </h2>
+                    <p style={{ margin: "4px 0 0", fontSize: "0.85rem", color: "var(--text-secondary)" }}>
+                      Registro histórico y monitoreo en vivo de todas las entregas coordinadas bajo tu red de repartidores.
+                    </p>
+                  </div>
+                  <div style={{ display: "flex", gap: "10px", alignItems: "center" }}>
+                    <button
+                      type="button"
+                      onClick={fetchSaEarningsData}
+                      style={{
+                        padding: "8px 16px",
+                        background: "var(--primary)",
+                        border: "none",
+                        borderRadius: "var(--radius-md)",
+                        color: "#ffffff",
+                        fontSize: "0.82rem",
+                        fontWeight: 600,
+                        cursor: "pointer",
+                        display: "flex",
+                        alignItems: "center",
+                        gap: "6px",
+                        boxShadow: "0 2px 4px rgba(247, 52, 12, 0.25)"
+                      }}
+                    >
+                      Actualizar Pedidos
+                    </button>
+                  </div>
+                </div>
+
+                {/* KPI Cards (Blanco, Negro, Rojo) */}
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: "16px" }}>
+                  <div className="glass-panel" style={{ padding: "18px 20px", borderRadius: "var(--radius-lg)", borderLeft: "4px solid var(--text-primary)" }}>
+                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                      <span style={{ fontSize: "0.82rem", color: "var(--text-secondary)", fontWeight: 600 }}>Total de Pedidos</span>
+                      <Package size={18} style={{ color: "var(--text-primary)" }} />
+                    </div>
+                    <div style={{ fontSize: "1.75rem", fontWeight: 800, color: "var(--text-primary)", marginTop: "8px" }}>
+                      {totalOrdersCount}
+                    </div>
+                    <span style={{ fontSize: "0.75rem", color: "var(--text-muted)", marginTop: "4px", display: "block" }}>
+                      Histórico global de entregas
+                    </span>
+                  </div>
+
+                  <div className="glass-panel" style={{ padding: "18px 20px", borderRadius: "var(--radius-lg)", borderLeft: "4px solid #0f172a" }}>
+                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                      <span style={{ fontSize: "0.82rem", color: "var(--text-secondary)", fontWeight: 600 }}>Entregados con Éxito</span>
+                      <CheckCircle2 size={18} style={{ color: "#0f172a" }} />
+                    </div>
+                    <div style={{ fontSize: "1.75rem", fontWeight: 800, color: "#0f172a", marginTop: "8px" }}>
+                      {completedCount}
+                    </div>
+                    <span style={{ fontSize: "0.75rem", color: "var(--text-muted)", marginTop: "4px", display: "block" }}>
+                      {totalOrdersCount > 0 ? `${Math.round((completedCount / totalOrdersCount) * 100)}% tasa de entrega` : "Sin pedidos aún"}
+                    </span>
+                  </div>
+
+                  <div className="glass-panel" style={{ padding: "18px 20px", borderRadius: "var(--radius-lg)", borderLeft: "4px solid var(--primary)" }}>
+                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                      <span style={{ fontSize: "0.82rem", color: "var(--text-secondary)", fontWeight: 600 }}>En Ruta / Tránsito</span>
+                      <Truck size={18} style={{ color: "var(--primary)" }} />
+                    </div>
+                    <div style={{ fontSize: "1.75rem", fontWeight: 800, color: "var(--primary)", marginTop: "8px" }}>
+                      {transitCount}
+                    </div>
+                    <span style={{ fontSize: "0.75rem", color: "var(--text-muted)", marginTop: "4px", display: "block" }}>
+                      En camino al cliente
+                    </span>
+                  </div>
+
+                  <div className="glass-panel" style={{ padding: "18px 20px", borderRadius: "var(--radius-lg)", borderLeft: "4px solid var(--text-primary)" }}>
+                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                      <span style={{ fontSize: "0.82rem", color: "var(--text-secondary)", fontWeight: 600 }}>Total Facturado Envíos</span>
+                      <DollarSign size={18} style={{ color: "var(--text-primary)" }} />
+                    </div>
+                    <div style={{ fontSize: "1.75rem", fontWeight: 800, color: "var(--text-primary)", marginTop: "8px" }}>
+                      {formatCurrency(totalShippingSum)}
+                    </div>
+                    <span style={{ fontSize: "0.75rem", color: "var(--text-muted)", marginTop: "4px", display: "block" }}>
+                      Tarifas brutas cobradas
+                    </span>
+                  </div>
+
+                  <div className="glass-panel" style={{ padding: "18px 20px", borderRadius: "var(--radius-lg)", borderLeft: "4px solid var(--primary)" }}>
+                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                      <span style={{ fontSize: "0.82rem", color: "var(--text-secondary)", fontWeight: 600 }}>Mi Comisión (20%)</span>
+                      <TrendingUp size={18} style={{ color: "var(--primary)" }} />
+                    </div>
+                    <div style={{ fontSize: "1.75rem", fontWeight: 800, color: "var(--primary)", marginTop: "8px" }}>
+                      {formatCurrency(totalBrokerCommission)}
+                    </div>
+                    <span style={{ fontSize: "0.75rem", color: "var(--text-muted)", marginTop: "4px", display: "block" }}>
+                      Ganancia calculada del Broker
+                    </span>
+                  </div>
+                </div>
+
+                {/* Filters & Search Bar */}
+                <div className="glass-panel" style={{ padding: "16px 20px", borderRadius: "var(--radius-lg)", display: "flex", flexWrap: "wrap", alignItems: "center", justifyContent: "space-between", gap: "12px" }}>
+                  <div style={{ display: "flex", flex: 1, minWidth: "260px", maxWidth: "450px", position: "relative" }}>
+                    <Search size={16} style={{ position: "absolute", left: "12px", top: "50%", transform: "translateY(-50%)", color: "var(--text-muted)" }} />
+                    <input
+                      type="text"
+                      placeholder="Buscar por código, cliente, dirección o repartidor..."
+                      value={orderHistorySearch}
+                      onChange={e => setOrderHistorySearch(e.target.value)}
+                      style={{
+                        width: "100%",
+                        padding: "8px 12px 8px 36px",
+                        borderRadius: "var(--radius-md)",
+                        border: "1px solid var(--border-color)",
+                        background: "var(--bg-primary)",
+                        color: "var(--text-primary)",
+                        fontSize: "0.82rem",
+                        outline: "none"
+                      }}
+                    />
+                  </div>
+
+                  <div style={{ display: "flex", gap: "10px", flexWrap: "wrap", alignItems: "center" }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+                      <Filter size={15} style={{ color: "var(--text-muted)" }} />
+                      <select
+                        value={orderHistoryStatusFilter}
+                        onChange={e => setOrderHistoryStatusFilter(e.target.value)}
+                        style={{
+                          padding: "8px 12px",
+                          borderRadius: "var(--radius-md)",
+                          border: "1px solid var(--border-color)",
+                          background: "var(--bg-primary)",
+                          color: "var(--text-primary)",
+                          fontSize: "0.82rem",
+                          fontWeight: 500,
+                          cursor: "pointer",
+                          outline: "none"
+                        }}
+                      >
+                        <option value="all">Todos los Estados</option>
+                        <option value="completed">Completadas / Entregadas</option>
+                        <option value="transit">En Tránsito / Ruta</option>
+                        <option value="pending">Pendientes / Recibidas</option>
+                        <option value="cancelled">Canceladas</option>
+                      </select>
+                    </div>
+
+                    <select
+                      value={orderHistoryDriverFilter}
+                      onChange={e => setOrderHistoryDriverFilter(e.target.value)}
+                      style={{
+                        padding: "8px 12px",
+                        borderRadius: "var(--radius-md)",
+                        border: "1px solid var(--border-color)",
+                        background: "var(--bg-primary)",
+                        color: "var(--text-primary)",
+                        fontSize: "0.82rem",
+                        fontWeight: 500,
+                        cursor: "pointer",
+                        outline: "none"
+                      }}
+                    >
+                      <option value="all">Todos los Repartidores</option>
+                      {myAssignedDrivers.map(d => (
+                        <option key={d.id} value={String(d.id)}>
+                          {d.name || d.email}
+                        </option>
+                      ))}
+                    </select>
+
+                    {(orderHistorySearch || orderHistoryStatusFilter !== "all" || orderHistoryDriverFilter !== "all") && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setOrderHistorySearch("");
+                          setOrderHistoryStatusFilter("all");
+                          setOrderHistoryDriverFilter("all");
+                        }}
+                        style={{
+                          padding: "8px 12px",
+                          background: "rgba(0, 0, 0, 0.04)",
+                          border: "1px solid var(--border-color)",
+                          borderRadius: "var(--radius-md)",
+                          color: "var(--text-secondary)",
+                          fontSize: "0.8rem",
+                          fontWeight: 600,
+                          cursor: "pointer"
+                        }}
+                      >
+                        Limpiar Filtros
+                      </button>
+                    )}
+                  </div>
+                </div>
+
+                {/* Orders Table */}
+                <div className={`glass-panel ${styles.tableCard}`} style={{ padding: "20px", borderRadius: "var(--radius-lg)" }}>
+                  <div className={styles.sectionHeader} style={{ marginBottom: "16px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                    <h3 className={styles.sectionTitle} style={{ margin: 0 }}>Listado de Entregas y Envíos</h3>
+                    <span style={{ fontSize: "0.8rem", color: "var(--text-muted)" }}>
+                      Mostrando {filteredDeliveries.length} de {brokerDeliveries.length} entregas
+                    </span>
+                  </div>
+
+                  <div className={styles.tableWrapper}>
+                    <table className={styles.table}>
+                      <thead>
+                        <tr>
+                          <th>Folio / ID</th>
+                          <th>Fecha y Hora</th>
+                          <th>Cliente / Destino</th>
+                          <th>Empresa Remitente</th>
+                          <th>Repartidor</th>
+                          <th>Tarifa Envío</th>
+                          <th>Comisión Broker (20%)</th>
+                          <th>Estado</th>
+                          <th style={{ textAlign: "right" }}>Detalles</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {filteredDeliveries.map((del: any) => {
+                          const dDriver = myAssignedDrivers.find(dr => String(dr.id) === String(del.id_repartidor || del.repartidor_id));
+                          const dComp = superAdminCompanies.find(c => String(c.idEmpresa) === String(del.idEmpresa));
+                          const fee = Number(del.monto_envio) || 0;
+                          const comm = fee * 0.20;
+                          const cStatus = classifyStatus(del.status);
+
+                          return (
+                            <tr key={del.id}>
+                              <td style={{ fontFamily: "var(--font-mono)", fontSize: "0.75rem", fontWeight: 700, color: "var(--text-primary)" }}>
+                                {del.id ? `#${String(del.id).slice(0, 8).toUpperCase()}` : "N/A"}
+                              </td>
+                              <td style={{ fontSize: "0.78rem", color: "var(--text-secondary)", whiteSpace: "nowrap" }}>
+                                {formatDate(del.created_time || del.created_at)}
+                              </td>
+                              <td>
+                                <div style={{ fontWeight: 600, fontSize: "0.82rem", color: "var(--text-primary)" }}>
+                                  {del.customer || "Cliente Final"}
+                                </div>
+                                <div style={{ fontSize: "0.72rem", color: "var(--text-muted)", maxWidth: "220px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={del.address}>
+                                  {del.address || "Dirección no especificada"}
+                                </div>
+                              </td>
+                              <td>
+                                <div style={{ fontWeight: 600, fontSize: "0.82rem", color: "var(--text-primary)" }}>
+                                  {dComp?.nombreEmpresa || "Empresa General"}
+                                </div>
+                                <div style={{ fontSize: "0.7rem", color: "var(--text-muted)" }}>
+                                  ID: {del.idEmpresa ? String(del.idEmpresa).slice(0, 8) : "N/A"}
+                                </div>
+                              </td>
+                              <td>
+                                <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                                  <div style={{
+                                    width: "28px",
+                                    height: "28px",
+                                    borderRadius: "50%",
+                                    background: "#0f172a",
+                                    color: "#ffffff",
+                                    display: "flex",
+                                    alignItems: "center",
+                                    justifyContent: "center",
+                                    fontSize: "0.72rem",
+                                    fontWeight: 700
+                                  }}>
+                                    {(dDriver?.name || "R")[0].toUpperCase()}
+                                  </div>
+                                  <div>
+                                    <div style={{ fontWeight: 600, fontSize: "0.82rem" }}>
+                                      {dDriver?.name || "Sin Asignar"}
+                                    </div>
+                                    <div style={{ fontSize: "0.7rem", color: "var(--text-muted)" }}>
+                                      {dDriver?.phone || dDriver?.email || "Conductor"}
+                                    </div>
+                                  </div>
+                                </div>
+                              </td>
+                              <td style={{ fontWeight: 700, color: "var(--text-primary)" }}>
+                                {formatCurrency(fee)}
+                              </td>
+                              <td style={{ fontWeight: 700, color: "var(--primary)" }}>
+                                {formatCurrency(comm)}
+                              </td>
+                              <td>
+                                <span style={{
+                                  fontSize: "0.72rem",
+                                  padding: "3px 8px",
+                                  borderRadius: "4px",
+                                  fontWeight: 700,
+                                  textTransform: "uppercase",
+                                  letterSpacing: "0.5px",
+                                  background: cStatus === "completed"
+                                    ? "#0f172a"
+                                    : cStatus === "transit"
+                                    ? "var(--primary)"
+                                    : cStatus === "cancelled"
+                                    ? "rgba(0, 0, 0, 0.15)"
+                                    : "rgba(247, 52, 12, 0.1)",
+                                  color: (cStatus === "completed" || cStatus === "transit")
+                                    ? "#ffffff"
+                                    : cStatus === "cancelled"
+                                    ? "#0f172a"
+                                    : "var(--primary)"
+                                }}>
+                                  {del.status || "registrado"}
+                                </span>
+                              </td>
+                              <td style={{ textAlign: "right" }}>
+                                <button
+                                  type="button"
+                                  onClick={() => setSelectedOrderHistoryDetail(del)}
+                                  title="Ver detalle del pedido"
+                                  style={{
+                                    padding: "5px 12px",
+                                    background: "rgba(0, 0, 0, 0.04)",
+                                    border: "1px solid var(--border-color)",
+                                    borderRadius: "var(--radius-sm)",
+                                    color: "var(--text-primary)",
+                                    fontSize: "0.75rem",
+                                    fontWeight: 600,
+                                    cursor: "pointer",
+                                    display: "inline-flex",
+                                    alignItems: "center",
+                                    gap: "4px"
+                                  }}
+                                >
+                                  <Eye size={13} /> Ver Detalle
+                                </button>
+                              </td>
+                            </tr>
+                          );
+                        })}
+
+                        {filteredDeliveries.length === 0 && (
+                          <tr>
+                            <td colSpan={9} style={{ textAlign: "center", padding: "40px 20px" }}>
+                              <ClipboardList size={36} style={{ color: "var(--text-muted)", margin: "0 auto 12px", display: "block", opacity: 0.5 }} />
+                              <div style={{ fontWeight: 600, color: "var(--text-primary)", marginBottom: "4px" }}>
+                                No se encontraron pedidos ni entregas.
+                              </div>
+                              <div style={{ fontSize: "0.85rem", color: "var(--text-muted)" }}>
+                                {orderHistorySearch || orderHistoryStatusFilter !== "all" || orderHistoryDriverFilter !== "all"
+                                  ? "Intenta modificando los criterios de búsqueda o filtros de estado/repartidor."
+                                  : "Aún no hay entregas generadas en las empresas o por los repartidores de tu red."}
+                              </div>
+                            </td>
+                          </tr>
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+
+                {/* MODAL: DETALLE DEL PEDIDO / DELIVERY */}
+                {selectedOrderHistoryDetail && (() => {
+                  const del = selectedOrderHistoryDetail;
+                  const dDriver = myAssignedDrivers.find(dr => String(dr.id) === String(del.id_repartidor || del.repartidor_id));
+                  const dComp = superAdminCompanies.find(c => String(c.idEmpresa) === String(del.idEmpresa));
+                  const fee = Number(del.monto_envio) || 0;
+                  const comm = fee * 0.20;
+                  const driverPay = fee * 0.80;
+                  const cStatus = classifyStatus(del.status);
+
+                  return (
+                    <div style={{
+                      position: "fixed",
+                      top: 0,
+                      left: 0,
+                      width: "100%",
+                      height: "100%",
+                      background: "rgba(0, 0, 0, 0.6)",
+                      backdropFilter: "blur(4px)",
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      zIndex: 1000,
+                      padding: "20px"
+                    }}>
+                      <div style={{
+                        width: "100%",
+                        maxWidth: "600px",
+                        maxHeight: "90vh",
+                        background: "#ffffff",
+                        borderRadius: "var(--radius-lg)",
+                        boxShadow: "0 20px 25px -5px rgba(0, 0, 0, 0.25)",
+                        display: "flex",
+                        flexDirection: "column",
+                        overflow: "hidden"
+                      }}>
+                        {/* Header */}
+                        <div style={{
+                          padding: "20px 24px",
+                          borderBottom: "1px solid var(--border-color)",
+                          display: "flex",
+                          justifyContent: "space-between",
+                          alignItems: "center",
+                          background: "#0f172a",
+                          color: "#ffffff"
+                        }}>
+                          <div>
+                            <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                              <h3 style={{ margin: 0, fontSize: "1.15rem", fontWeight: 700, color: "#ffffff" }}>
+                                Pedido #{del.id ? String(del.id).slice(0, 8).toUpperCase() : "N/A"}
+                              </h3>
+                              <span style={{
+                                fontSize: "0.7rem",
+                                padding: "2px 8px",
+                                borderRadius: "4px",
+                                fontWeight: 700,
+                                textTransform: "uppercase",
+                                background: cStatus === "completed" ? "rgba(255, 255, 255, 0.2)" : "var(--primary)",
+                                color: "#ffffff"
+                              }}>
+                                {del.status || "registrado"}
+                              </span>
+                            </div>
+                            <p style={{ margin: "4px 0 0", fontSize: "0.78rem", color: "rgba(255, 255, 255, 0.7)" }}>
+                              Fecha: {formatDate(del.created_time || del.created_at)}
+                            </p>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => setSelectedOrderHistoryDetail(null)}
+                            style={{
+                              background: "transparent",
+                              border: "none",
+                              fontSize: "1.2rem",
+                              cursor: "pointer",
+                              color: "#ffffff",
+                              lineHeight: 1
+                            }}
+                          >
+                            ✕
+                          </button>
+                        </div>
+
+                        {/* Content */}
+                        <div style={{ padding: "24px", overflowY: "auto", flexGrow: 1, display: "flex", flexDirection: "column", gap: "20px" }}>
+                          {/* Destinatario y Dirección */}
+                          <div style={{ padding: "16px", background: "rgba(0, 0, 0, 0.02)", borderRadius: "var(--radius-md)", border: "1px solid var(--border-color)" }}>
+                            <div style={{ fontSize: "0.75rem", fontWeight: 700, textTransform: "uppercase", color: "var(--text-muted)", marginBottom: "8px", display: "flex", alignItems: "center", gap: "6px" }}>
+                              <MapPin size={14} style={{ color: "var(--primary)" }} /> Destino de la Entrega
+                            </div>
+                            <div style={{ fontSize: "1rem", fontWeight: 700, color: "var(--text-primary)" }}>
+                              {del.customer || "Cliente Final"}
+                            </div>
+                            <div style={{ fontSize: "0.85rem", color: "var(--text-secondary)", marginTop: "4px" }}>
+                              {del.address || "Dirección no especificada"}
+                            </div>
+                            {del.lat && del.lng && (
+                              <div style={{ fontSize: "0.75rem", color: "var(--text-muted)", marginTop: "6px", fontFamily: "var(--font-mono)" }}>
+                                Coordenadas: {del.lat}, {del.lng}
+                              </div>
+                            )}
+                          </div>
+
+                          {/* Empresa Remitente y Repartidor Asignado */}
+                          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "12px" }}>
+                            <div style={{ padding: "14px", background: "rgba(0, 0, 0, 0.02)", borderRadius: "var(--radius-md)", border: "1px solid var(--border-color)" }}>
+                              <div style={{ fontSize: "0.72rem", fontWeight: 700, textTransform: "uppercase", color: "var(--text-muted)", marginBottom: "6px", display: "flex", alignItems: "center", gap: "5px" }}>
+                                <Building size={13} style={{ color: "#0f172a" }} /> Empresa Remitente
+                              </div>
+                              <div style={{ fontWeight: 700, fontSize: "0.88rem", color: "var(--text-primary)" }}>
+                                {dComp?.nombreEmpresa || "Empresa General"}
+                              </div>
+                              <div style={{ fontSize: "0.75rem", color: "var(--text-muted)", marginTop: "2px" }}>
+                                ID: {del.idEmpresa ? String(del.idEmpresa).slice(0, 10) : "N/A"}
+                              </div>
+                            </div>
+
+                            <div style={{ padding: "14px", background: "rgba(0, 0, 0, 0.02)", borderRadius: "var(--radius-md)", border: "1px solid var(--border-color)" }}>
+                              <div style={{ fontSize: "0.72rem", fontWeight: 700, textTransform: "uppercase", color: "var(--text-muted)", marginBottom: "6px", display: "flex", alignItems: "center", gap: "5px" }}>
+                                <Truck size={13} style={{ color: "var(--primary)" }} /> Repartidor Asignado
+                              </div>
+                              <div style={{ fontWeight: 700, fontSize: "0.88rem", color: "var(--text-primary)" }}>
+                                {dDriver?.name || "Sin Repartidor"}
+                              </div>
+                              <div style={{ fontSize: "0.75rem", color: "var(--text-muted)", marginTop: "2px" }}>
+                                {dDriver?.phone || dDriver?.email || "Sin contacto"}
+                              </div>
+                            </div>
+                          </div>
+
+                          {/* Items / Productos si existen */}
+                          {del.items && (
+                            <div style={{ padding: "14px", background: "rgba(0, 0, 0, 0.02)", borderRadius: "var(--radius-md)", border: "1px solid var(--border-color)" }}>
+                              <div style={{ fontSize: "0.72rem", fontWeight: 700, textTransform: "uppercase", color: "var(--text-muted)", marginBottom: "8px", display: "flex", alignItems: "center", gap: "5px" }}>
+                                <Package size={13} style={{ color: "#0f172a" }} /> Detalle del Pedido
+                              </div>
+                              <div style={{ fontSize: "0.82rem", color: "var(--text-primary)", whiteSpace: "pre-wrap" }}>
+                                {typeof del.items === "string" ? del.items : JSON.stringify(del.items, null, 2)}
+                              </div>
+                            </div>
+                          )}
+
+                          {/* Desglose Financiero */}
+                          <div style={{ padding: "16px", borderRadius: "var(--radius-md)", border: "1px solid var(--border-color)", background: "#ffffff" }}>
+                            <div style={{ fontSize: "0.75rem", fontWeight: 700, textTransform: "uppercase", color: "var(--text-muted)", marginBottom: "12px" }}>
+                              Desglose Financiero de la Tarifa
+                            </div>
+                            <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+                              <div style={{ display: "flex", justifyContent: "space-between", fontSize: "0.85rem" }}>
+                                <span style={{ color: "var(--text-secondary)" }}>Tarifa Total de Envío:</span>
+                                <span style={{ fontWeight: 700, color: "var(--text-primary)" }}>{formatCurrency(fee)}</span>
+                              </div>
+                              <div style={{ display: "flex", justifyContent: "space-between", fontSize: "0.85rem" }}>
+                                <span style={{ color: "var(--text-secondary)" }}>Pago al Repartidor (80%):</span>
+                                <span style={{ fontWeight: 600, color: "var(--text-primary)" }}>{formatCurrency(driverPay)}</span>
+                              </div>
+                              <div style={{ height: "1px", background: "var(--border-color)", margin: "4px 0" }} />
+                              <div style={{ display: "flex", justifyContent: "space-between", fontSize: "0.95rem" }}>
+                                <span style={{ fontWeight: 700, color: "var(--primary)" }}>Comisión de Broker (20%):</span>
+                                <span style={{ fontWeight: 800, color: "var(--primary)" }}>{formatCurrency(comm)}</span>
+                              </div>
+                            </div>
+                          </div>
+
+                          {/* Timestamps */}
+                          {del.delivered_time && (
+                            <div style={{ fontSize: "0.75rem", color: "var(--text-muted)", textAlign: "center" }}>
+                              Entregado el: {formatDate(del.delivered_time)}
+                            </div>
+                          )}
+                        </div>
+
+                        {/* Footer */}
+                        <div style={{ padding: "14px 24px", borderTop: "1px solid var(--border-color)", display: "flex", justifyContent: "flex-end", background: "rgba(0,0,0,0.02)" }}>
+                          <button
+                            type="button"
+                            onClick={() => setSelectedOrderHistoryDetail(null)}
+                            style={{
+                              padding: "8px 18px",
+                              background: "#0f172a",
+                              color: "#ffffff",
+                              border: "none",
+                              borderRadius: "var(--radius-md)",
+                              fontSize: "0.82rem",
+                              fontWeight: 600,
+                              cursor: "pointer"
+                            }}
+                          >
+                            Cerrar
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })()}
+              </div>
+            );
+          })()}
+
+{/* TAB: BROKER - GESTIÓN DE SUCURSALES Y TARIFAS */}
+           {activeTab === "broker-companies" && isBroker && (() => {
+             const loggedBroker = brokersList.find(b => 
+               (currentUserEmail && b.email?.toLowerCase() === currentUserEmail.toLowerCase()) ||
+              (currentUserName && b.name?.toLowerCase() === currentUserName.toLowerCase())
+            ) || brokersList[0];
+ 
+            const assignedCompanyIds: string[] = (loggedBroker?.empresas_asociadas || []).map((id: string) => String(id).trim());
+            const myCompanies = superAdminCompanies.filter(c => 
+              assignedCompanyIds.some(aId => aId.toLowerCase() === String(c.idEmpresa || "").toLowerCase())
+            );
+
+            // Filter sucursales that belong to assigned companies (or all if broker has no specific filter)
+            const brokerSucursales = brokerSucursalesList.filter(s => {
+              const sEmpId = String(s.IDEmpresa || s.idEmpresa || s.id_empresa || "").trim().toLowerCase();
+              if (assignedCompanyIds.length === 0) return true;
+              return assignedCompanyIds.some(cId => cId.toLowerCase() === sEmpId);
+            });
+
+            // Filter by search and company
+            const filteredSucursales = brokerSucursales.filter(s => {
+              // Company filter
+              if (brokerSucursalCompanyFilter !== "all") {
+                const sEmpId = String(s.IDEmpresa || s.idEmpresa || s.id_empresa || "").trim().toLowerCase();
+                if (sEmpId !== brokerSucursalCompanyFilter.toLowerCase()) return false;
+              }
+
+              // Search query
+              if (brokerSucursalSearch.trim()) {
+                const q = brokerSucursalSearch.toLowerCase();
+                const comp = superAdminCompanies.find(c => 
+                  String(c.idEmpresa).toLowerCase() === String(s.IDEmpresa).toLowerCase()
+                );
+                const matchName = String(s.NombreSucursal || "").toLowerCase().includes(q);
+                const matchAddress = String(s.DireccionSucursal || "").toLowerCase().includes(q);
+                const matchComp = comp ? String(comp.NombreEmpresa || comp.Nombre_Empresa || "").toLowerCase().includes(q) : false;
+                if (!matchName && !matchAddress && !matchComp) return false;
+              }
+
+              return true;
+            });
+
+            // Companies without any sucursal registered in Sucursales table
+            const companiesWithoutSucursales = myCompanies.filter(c => {
+              return !brokerSucursales.some(s => 
+                String(s.IDEmpresa || "").toLowerCase() === String(c.idEmpresa).toLowerCase()
+              );
+            });
+
+            return (
+              <div style={{ display: "flex", flexDirection: "column", gap: "24px" }}>
+                {/* Header panel */}
+                <div className="glass-panel" style={{ padding: "18px 24px", borderRadius: "var(--radius-lg)", display: "flex", flexWrap: "wrap", alignItems: "center", justifyContent: "space-between", gap: "16px" }}>
+                  <div>
+                    <h2 style={{ fontSize: "1.25rem", fontWeight: 700, margin: 0, color: "var(--text-primary)", display: "flex", alignItems: "center", gap: "8px" }}>
+                      <Store size={22} style={{ color: "var(--primary)" }} /> Sucursales y Tarifas de la Red
+                    </h2>
+                    <p style={{ margin: "4px 0 0", fontSize: "0.85rem", color: "var(--text-secondary)" }}>
+                      Supervisión y configuración de ubicación, Google Maps, fotografías y tarifas de envío por cada sucursal.
+                    </p>
+                  </div>
+                  <div style={{ display: "flex", gap: "10px", alignItems: "center" }}>
+                    <span style={{ background: "rgba(0, 0, 0, 0.04)", color: "var(--text-primary)", padding: "6px 14px", borderRadius: "var(--radius-md)", fontSize: "0.82rem", fontWeight: 600 }}>
+                      {brokerSucursales.length} sucursales activas • {assignedCompanyIds.length} empresas
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        fetchBrokerSucursales();
+                        fetchSaCompanies();
+                      }}
+                      style={{
+                        padding: "8px 14px",
+                        background: "var(--primary)",
+                        border: "none",
+                        borderRadius: "var(--radius-md)",
+                        color: "#ffffff",
+                        fontSize: "0.82rem",
+                        fontWeight: 600,
+                        cursor: "pointer",
+                        boxShadow: "0 2px 4px rgba(247, 52, 12, 0.25)"
+                      }}
+                    >
+                      Actualizar
+                    </button>
+                  </div>
+                </div>
+
+                {/* Search and Company filter bar */}
+                <div className="glass-panel" style={{ padding: "16px 20px", borderRadius: "var(--radius-lg)", display: "flex", flexWrap: "wrap", alignItems: "center", justifyContent: "space-between", gap: "12px" }}>
+                  <div style={{ display: "flex", flex: 1, minWidth: "260px", maxWidth: "450px", position: "relative" }}>
+                    <Search size={16} style={{ position: "absolute", left: "12px", top: "50%", transform: "translateY(-50%)", color: "var(--text-muted)" }} />
+                    <input
+                      type="text"
+                      placeholder="Buscar por nombre de sucursal, dirección o empresa..."
+                      value={brokerSucursalSearch}
+                      onChange={e => setBrokerSucursalSearch(e.target.value)}
+                      style={{
+                        width: "100%",
+                        padding: "8px 12px 8px 36px",
+                        borderRadius: "var(--radius-md)",
+                        border: "1px solid var(--border-color)",
+                        background: "var(--bg-primary)",
+                        color: "var(--text-primary)",
+                        fontSize: "0.82rem",
+                        outline: "none"
+                      }}
+                    />
+                  </div>
+
+                  <div style={{ display: "flex", gap: "10px", alignItems: "center", flexWrap: "wrap" }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+                      <Filter size={15} style={{ color: "var(--text-muted)" }} />
+                      <select
+                        value={brokerSucursalCompanyFilter}
+                        onChange={e => setBrokerSucursalCompanyFilter(e.target.value)}
+                        style={{
+                          padding: "8px 12px",
+                          borderRadius: "var(--radius-md)",
+                          border: "1px solid var(--border-color)",
+                          background: "var(--bg-primary)",
+                          color: "var(--text-primary)",
+                          fontSize: "0.82rem",
+                          fontWeight: 500,
+                          cursor: "pointer",
+                          outline: "none"
+                        }}
+                      >
+                        <option value="all">Todas las Empresas ({assignedCompanyIds.length})</option>
+                        {myCompanies.map(c => (
+                          <option key={c.idEmpresa} value={c.idEmpresa}>
+                            {c.NombreEmpresa || c.Nombre_Empresa || c.idEmpresa}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+
+                    {(brokerSucursalSearch || brokerSucursalCompanyFilter !== "all") && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setBrokerSucursalSearch("");
+                          setBrokerSucursalCompanyFilter("all");
+                        }}
+                        style={{
+                          padding: "8px 12px",
+                          background: "rgba(0, 0, 0, 0.04)",
+                          border: "1px solid var(--border-color)",
+                          borderRadius: "var(--radius-md)",
+                          color: "var(--text-secondary)",
+                          fontSize: "0.8rem",
+                          fontWeight: 600,
+                          cursor: "pointer"
+                        }}
+                      >
+                        Limpiar Filtros
+                      </button>
+                    )}
+                  </div>
+                </div>
+
+                {/* SUCURSALES GRID (Direct view of Branches) */}
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(380px, 1fr))", gap: "20px" }}>
+                  {filteredSucursales.map(s => {
+                    const comp = superAdminCompanies.find(c => 
+                      String(c.idEmpresa || "").toLowerCase() === String(s.IDEmpresa || "").toLowerCase()
+                    );
+
+                    const sucFotos = Array.isArray(s.FotosSucursales) 
+                      ? s.FotosSucursales 
+                      : (Array.isArray(s.FotosSucursal) ? s.FotosSucursal : []);
+
+                    let rawTarifas = s.Tarifas;
+                    if (typeof rawTarifas === "string") {
+                      try { rawTarifas = JSON.parse(rawTarifas); } catch { rawTarifas = []; }
+                    }
+                    if (!Array.isArray(rawTarifas)) rawTarifas = [];
+ 
+                     return (
+                      <div 
+                        key={s.IDSucursal} 
+                        className="glass-panel" 
+                        style={{ 
+                          padding: "22px", 
+                          borderRadius: "var(--radius-lg)", 
+                          display: "flex", 
+                          flexDirection: "column", 
+                          gap: "16px",
+                          border: "1px solid var(--border-color)",
+                          background: "#ffffff",
+                          boxShadow: "0 2px 8px rgba(0, 0, 0, 0.04)"
+                        }}
+                      >
+                        {/* Sucursal Title & Company Badge */}
+                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: "12px", borderBottom: "1px solid var(--border-color)", paddingBottom: "14px" }}>
+                          <div style={{ display: "flex", gap: "12px", alignItems: "center" }}>
+                            <div style={{
+                              width: "44px",
+                              height: "44px",
+                              borderRadius: "var(--radius-md)",
+                              background: "#0f172a",
+                              color: "#ffffff",
+                              display: "flex",
+                              alignItems: "center",
+                              justifyContent: "center",
+                              flexShrink: 0
+                            }}>
+                              <Store size={22} style={{ color: "#ffffff" }} />
+                            </div>
+                            <div>
+                              <h3 style={{ margin: 0, fontSize: "1.05rem", fontWeight: 700, color: "var(--text-primary)" }}>
+                                {s.NombreSucursal || "Sucursal"}
+                              </h3>
+                              <div style={{ display: "flex", alignItems: "center", gap: "8px", marginTop: "4px" }}>
+                                <span style={{
+                                  fontSize: "0.72rem",
+                                  padding: "2px 8px",
+                                  borderRadius: "4px",
+                                  fontWeight: 600,
+                                  background: "rgba(0, 0, 0, 0.05)",
+                                  color: "var(--text-primary)"
+                                }}>
+                                  Empresa: <strong>{comp?.NombreEmpresa || comp?.Nombre_Empresa || s.IDEmpresa}</strong>
+                                </span>
+                                <span style={{ fontSize: "0.68rem", color: "var(--text-muted)", fontFamily: "var(--font-mono)" }}>
+                                  ID: {s.IDSucursal?.slice(0, 8)}...
+                                </span>
+                              </div>
+                            </div>
+                          </div>
+
+                          <button
+                            type="button"
+                            onClick={() => handleOpenEditSucursal(s)}
+                            style={{
+                              padding: "7px 14px",
+                              background: "var(--primary)",
+                              border: "none",
+                              borderRadius: "var(--radius-sm)",
+                              color: "#ffffff",
+                              fontSize: "0.78rem",
+                              fontWeight: 600,
+                              cursor: "pointer",
+                              display: "inline-flex",
+                              alignItems: "center",
+                              gap: "6px",
+                              boxShadow: "0 2px 4px rgba(247, 52, 12, 0.25)",
+                              whiteSpace: "nowrap"
+                            }}
+                          >
+                            <Edit2 size={13} /> Editar Sucursal y Tarifas
+                          </button>
+                        </div>
+
+                        {/* 1. Ubicación Física */}
+                        <div style={{ background: "rgba(0, 0, 0, 0.02)", padding: "12px", borderRadius: "var(--radius-md)", border: "1px solid var(--border-color)", display: "flex", flexDirection: "column", gap: "6px" }}>
+                          <div style={{ fontSize: "0.72rem", fontWeight: 700, textTransform: "uppercase", color: "var(--text-muted)", display: "flex", alignItems: "center", gap: "5px" }}>
+                            <MapPin size={13} style={{ color: "var(--primary)" }} /> Ubicación de la Sucursal
+                          </div>
+                          <div style={{ fontSize: "0.84rem", color: "var(--text-primary)", fontWeight: 500 }}>
+                            {s.DireccionSucursal || "Dirección física no especificada"}
+                          </div>
+                          {(s.Latitud !== null && s.Latitud !== undefined && s.Longitud !== null && s.Longitud !== undefined) ? (
+                            <div style={{ fontSize: "0.72rem", color: "var(--text-muted)", fontFamily: "var(--font-mono)" }}>
+                              Coordenadas: Lat {s.Latitud} • Lng {s.Longitud}
+                            </div>
+                          ) : (
+                            <div style={{ fontSize: "0.72rem", color: "var(--primary)", fontWeight: 600 }}>
+                              ⚠️ Coordenadas GPS pendientes de configurar
+                            </div>
+                          )}
+                        </div>
+
+                        {/* 2. Link de Google Maps */}
+                        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", fontSize: "0.78rem" }}>
+                          <span style={{ color: "var(--text-secondary)", fontWeight: 600 }}>Google Maps:</span>
+                          {s.LinkGoogleMaps ? (
+                            <a 
+                              href={s.LinkGoogleMaps} 
+                              target="_blank" 
+                              rel="noopener noreferrer"
+                              style={{
+                                display: "inline-flex",
+                                alignItems: "center",
+                                gap: "5px",
+                                color: "var(--primary)",
+                                textDecoration: "underline",
+                                fontWeight: 600,
+                                fontSize: "0.78rem"
+                              }}
+                            >
+                              <ExternalLink size={13} /> Abrir en Google Maps
+                            </a>
+                          ) : (
+                            <span style={{ color: "var(--text-muted)", fontStyle: "italic", fontSize: "0.75rem" }}>
+                              Sin enlace asignado
+                            </span>
+                          )}
+                        </div>
+
+                        {/* 3. Fotos de la Sucursal */}
+                        <div>
+                          <div style={{ fontSize: "0.75rem", fontWeight: 700, color: "var(--text-primary)", marginBottom: "8px", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                            <span style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+                              <ImageIcon size={14} style={{ color: "var(--primary)" }} />
+                              Fotos de la Sucursal
+                            </span>
+                            <span style={{ fontSize: "0.72rem", color: "var(--text-muted)" }}>
+                              {sucFotos.length} {sucFotos.length === 1 ? "foto" : "fotos"}
+                            </span>
+                          </div>
+                          {sucFotos.length > 0 ? (
+                            <div style={{ display: "flex", gap: "8px", overflowX: "auto", paddingBottom: "4px" }}>
+                              {sucFotos.map((url: string, pIdx: number) => (
+                                <a key={pIdx} href={url} target="_blank" rel="noopener noreferrer" style={{ display: "block", flexShrink: 0 }}>
+                                  <img
+                                    src={url}
+                                    alt={`Foto ${pIdx + 1}`}
+                                    style={{
+                                      width: "56px",
+                                      height: "56px",
+                                      borderRadius: "6px",
+                                      objectFit: "cover",
+                                      border: "1px solid var(--border-color)"
+                                    }}
+                                  />
+                                </a>
+                              ))}
+                            </div>
+                          ) : (
+                            <div style={{ padding: "10px", background: "rgba(0,0,0,0.02)", borderRadius: "var(--radius-sm)", textAlign: "center", fontSize: "0.75rem", color: "var(--text-muted)" }}>
+                              Sin fotografías de la sucursal
+                            </div>
+                          )}
+                        </div>
+
+                        {/* 4. Tarifas de Envío Configuradas (Columna JSON) */}
+                        <div style={{ borderTop: "1px solid var(--border-color)", paddingTop: "12px" }}>
+                          <div style={{ fontSize: "0.75rem", fontWeight: 700, color: "var(--text-primary)", marginBottom: "8px", display: "flex", alignItems: "center", gap: "6px" }}>
+                            <Percent size={14} style={{ color: "var(--primary)" }} />
+                            Tarifas de Envío Configuradas (JSON)
+                          </div>
+                          {rawTarifas.length > 0 ? (
+                            <div style={{ display: "flex", flexWrap: "wrap", gap: "6px" }}>
+                              {rawTarifas.map((t: any, tIdx: number) => {
+                                if (t.km_extra || t.precio_por_km !== undefined) {
+                                  return (
+                                    <span 
+                                      key={tIdx}
+                                      style={{
+                                        background: "#0f172a",
+                                        color: "#ffffff",
+                                        padding: "4px 10px",
+                                        borderRadius: "6px",
+                                        fontSize: "0.75rem",
+                                        fontWeight: 700
+                                      }}
+                                    >
+                                      Km extra: +${t.precio_por_km || 10}/km
+                                    </span>
+                                  );
+                                }
+                                return (
+                                  <span 
+                                    key={tIdx}
+                                    style={{
+                                      background: "rgba(247, 52, 12, 0.08)",
+                                      border: "1px solid rgba(247, 52, 12, 0.25)",
+                                      color: "var(--primary)",
+                                      padding: "4px 10px",
+                                      borderRadius: "6px",
+                                      fontSize: "0.75rem",
+                                      fontWeight: 700
+                                    }}
+                                  >
+                                    {t.min_km} - {t.max_km} km: ${t.precio}
+                                  </span>
+                                );
+                              })}
+                            </div>
+                          ) : (
+                            <div style={{ padding: "8px", background: "rgba(0,0,0,0.02)", borderRadius: "var(--radius-sm)", fontSize: "0.75rem", color: "var(--text-muted)" }}>
+                              Sin tarifas configuradas en el esquema JSON
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+
+                  {filteredSucursales.length === 0 && (
+                    <div className="glass-panel" style={{ padding: "40px 20px", borderRadius: "var(--radius-lg)", gridColumn: "1 / -1", textAlign: "center" }}>
+                      <Store size={36} style={{ color: "var(--text-muted)", margin: "0 auto 12px", display: "block", opacity: 0.5 }} />
+                      <div style={{ fontWeight: 600, color: "var(--text-primary)", marginBottom: "4px" }}>
+                        No se encontraron sucursales para los filtros seleccionados.
+                      </div>
+                      <div style={{ fontSize: "0.85rem", color: "var(--text-muted)" }}>
+                        {brokerSucursalSearch || brokerSucursalCompanyFilter !== "all"
+                          ? "Intenta modificando los términos de búsqueda o el filtro de empresa."
+                          : "Aún no hay sucursales registradas para tus empresas vinculadas."}
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                {/* Sección de empresas asociadas sin sucursales aún (si las hay) */}
+                {companiesWithoutSucursales.length > 0 && (
+                  <div className="glass-panel" style={{ padding: "20px", borderRadius: "var(--radius-lg)", border: "1px dashed var(--border-color)", background: "rgba(0,0,0,0.01)" }}>
+                    <div style={{ fontSize: "0.88rem", fontWeight: 700, color: "var(--text-primary)", marginBottom: "4px" }}>
+                      Empresas vinculadas pendientes de sucursal
+                    </div>
+                    <p style={{ margin: "0 0 14px", fontSize: "0.8rem", color: "var(--text-muted)" }}>
+                      Las siguientes empresas asociadas a tu cuenta aún no tienen sucursal registrada en la tabla Sucursales.
+                    </p>
+                    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: "12px" }}>
+                      {companiesWithoutSucursales.map(c => (
+                        <div key={c.idEmpresa} style={{ padding: "14px", background: "#ffffff", borderRadius: "var(--radius-md)", border: "1px solid var(--border-color)", display: "flex", justifyContent: "space-between", alignItems: "center", gap: "10px" }}>
+                          <div>
+                            <div style={{ fontWeight: 700, fontSize: "0.9rem", color: "var(--text-primary)" }}>
+                               {c.NombreEmpresa || c.Nombre_Empresa || c.idEmpresa}
+                             </div>
+                             <div style={{ fontSize: "0.72rem", color: "var(--text-muted)", fontFamily: "var(--font-mono)" }}>
+                             </div>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => handleOpenEditSucursal({
+                              IDSucursal: crypto.randomUUID(),
+                              IDEmpresa: c.idEmpresa,
+                              NombreSucursal: `${c.NombreEmpresa || c.Nombre_Empresa || 'Sucursal'} Matriz`,
+                              DireccionSucursal: c.DireccionEmpresa || "",
+                              Latitud: null,
+                              Longitud: null,
+                              LinkGoogleMaps: "",
+                              FotosSucursales: [],
+                              Tarifas: [{ min_km: 0, max_km: 5, precio: 40 }]
+                            })}
+                            style={{
+                              padding: "6px 12px",
+                              background: "var(--primary)",
+                              border: "none",
+                              borderRadius: "var(--radius-sm)",
+                              color: "#ffffff",
+                              fontSize: "0.75rem",
+                              fontWeight: 600,
+                              cursor: "pointer",
+                              display: "inline-flex",
+                              alignItems: "center",
+                              gap: "4px"
+                            }}
+                          >
+                            <Plus size={13} /> Configurar Sucursal
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+               </div>
+             );
+           })()}
+
           {/* MODAL: CREAR / EDITAR REPARTIDOR */}
           {isRepartidorModalOpen && (
             <div style={{
@@ -9961,6 +12292,48 @@ export default function Dashboard() {
                       />
                     </div>
                   </div>
+
+                  {/* Contraseña de acceso para nuevo repartidor */}
+                  {!editingRepartidor && (
+                    <div className={styles.formGroup}>
+                      <label className={styles.inputLabel} style={{ fontWeight: 600, color: "var(--text-primary)" }}>
+                        Contraseña de Acceso (para inicio de sesión del conductor) *
+                      </label>
+                      <div style={{ position: "relative" }}>
+                        <input
+                          type={showRepPassword ? "text" : "password"}
+                          required
+                          placeholder="Mínimo 6 caracteres para autenticación"
+                          value={repPassword}
+                          onChange={(e) => setRepPassword(e.target.value)}
+                          className={styles.formInput}
+                          style={{ padding: "10px 40px 10px 12px" }}
+                          disabled={repIsLoading}
+                        />
+                        <button
+                          type="button"
+                          onClick={() => setShowRepPassword(!showRepPassword)}
+                          style={{
+                            position: "absolute",
+                            right: "12px",
+                            top: "50%",
+                            transform: "translateY(-50%)",
+                            background: "none",
+                            border: "none",
+                            color: "var(--text-muted)",
+                            cursor: "pointer",
+                            display: "flex",
+                            alignItems: "center"
+                          }}
+                        >
+                          {showRepPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+                        </button>
+                      </div>
+                      <span style={{ fontSize: "0.72rem", color: "var(--text-muted)", marginTop: "4px", display: "block" }}>
+                        El repartidor podrá iniciar sesión en la plataforma y en su app móvil con este correo y contraseña.
+                      </span>
+                    </div>
+                  )}
 
                   {/* Broker Responsable (broker_id) */}
                   <div className={styles.formGroup}>

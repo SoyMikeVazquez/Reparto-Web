@@ -136,6 +136,7 @@ export default function Login() {
   };
 
   const handleLogin = async () => {
+    let authErrorMsg = "";
     try {
       // 1. Try Supabase Auth check
       const { data: authData, error: authErr } = await supabase.auth.signInWithPassword({
@@ -144,10 +145,12 @@ export default function Login() {
       });
 
       if (authErr) {
+        authErrorMsg = authErr.message || "";
         console.warn("Supabase auth login failed, trying local fallback:", authErr.message);
       } else if (authData?.user) {
         // Fetch matching row from public.users where IDUser = session.user.id
         const userId = authData.user.id;
+        const userEmail = email.trim().toLowerCase();
         let dbUser: any = null;
         
         const { data: userById, error: dbErr } = await supabase
@@ -160,7 +163,6 @@ export default function Login() {
           dbUser = userById;
         } else {
           // Fallback: search by email
-          const userEmail = email.trim().toLowerCase();
           const { data: userByMail } = await supabase
             .from("users")
             .select("*")
@@ -177,9 +179,89 @@ export default function Login() {
           }
         }
 
+        // Fallback 2: Check if this user is a registered Broker in the brokers table
+        if (!dbUser) {
+          const { data: brokerData } = await supabase
+            .from("brokers")
+            .select("*")
+            .or(`id.eq.${userId},email.eq.${userEmail}`)
+            .maybeSingle();
+
+          if (brokerData) {
+            dbUser = {
+              IDUser: userId,
+              name: brokerData.name,
+              mail: brokerData.email,
+              Rol: "Broker",
+              isAdmin: false,
+              superAdmin: false,
+              IDEmpresa: brokerData.empresas_asociadas?.[0] || null,
+              Sucursales: []
+            };
+
+            // Auto-heal and sync into public.users table
+            try {
+              await supabase
+                .from("users")
+                .upsert({
+                  IDUser: userId,
+                  name: brokerData.name,
+                  mail: brokerData.email,
+                  Rol: "Broker",
+                  isAdmin: false,
+                  superAdmin: false,
+                  IDEmpresa: brokerData.empresas_asociadas?.[0] || null,
+                  Sucursales: []
+                }, { onConflict: "IDUser" });
+            } catch (syncErr) {
+              console.warn("Could not sync broker to public.users:", syncErr);
+            }
+          }
+        }
+
+        // Fallback 3: Check if this user is a registered Repartidor in the repartidores table
+        if (!dbUser) {
+          const { data: repData } = await supabase
+            .from("repartidores")
+            .select("*")
+            .or(`id_repartidor.eq.${userId},email.eq.${userEmail}`)
+            .maybeSingle();
+
+          if (repData) {
+            dbUser = {
+              IDUser: userId,
+              name: repData.name,
+              mail: repData.email,
+              Rol: "Repartidor",
+              isAdmin: false,
+              superAdmin: false,
+              IDEmpresa: null,
+              Sucursales: []
+            };
+
+            // Auto-heal and sync into public.users table
+            try {
+              await supabase
+                .from("users")
+                .upsert({
+                  IDUser: userId,
+                  name: repData.name,
+                  mail: repData.email,
+                  Rol: "Repartidor",
+                  isAdmin: false,
+                  superAdmin: false,
+                  IDEmpresa: null,
+                  Sucursales: []
+                }, { onConflict: "IDUser" });
+            } catch (syncErr) {
+              console.warn("Could not sync repartidor to public.users:", syncErr);
+            }
+          }
+        }
+
         if (dbUser) {
           // Fetch their associated company
-          let companyName = "Empresa Asociada";
+          let companyName = dbUser.Rol === "Broker" ? "Broker Logístico" : dbUser.Rol === "Repartidor" ? "Flota de Reparto" : "Empresa Asociada";
           let companyLogo = "";
           if (dbUser.IDEmpresa) {
             const { data: dbCompany } = await supabase
@@ -188,7 +270,7 @@ export default function Login() {
               .eq("idEmpresa", dbUser.IDEmpresa)
               .maybeSingle();
             if (dbCompany) {
-              companyName = dbCompany.NombreEmpresa || "Empresa Asociada";
+              companyName = dbCompany.NombreEmpresa || companyName;
               companyLogo = dbCompany.logoEmpresa || "";
             }
           }
@@ -211,7 +293,7 @@ export default function Login() {
           router.push("/dashboard");
           return;
         } else {
-          console.warn("Supabase user authenticated, but no public.users row found by IDUser or email. Falling back to local storage.");
+          console.warn("Supabase user authenticated, but no public.users or brokers row found. Falling back to local storage.");
         }
       }
     } catch (err) {
@@ -226,7 +308,7 @@ export default function Login() {
 
     if (matchedLocal) {
       // Load company name from local list or mock list
-      let companyName = "Reparto Express Local";
+      let companyName = matchedLocal.Rol === "Broker" ? "Broker Logístico" : matchedLocal.Rol === "Repartidor" ? "Flota de Reparto" : "Reparto Express Local";
       let companyLogo = "";
       const localCompanies = JSON.parse(localStorage.getItem("reparto_local_companies") || "[]");
       const matchedCompany = [...localCompanies, ...MOCK_COMPANIES].find(
@@ -255,7 +337,17 @@ export default function Login() {
       return;
     }
 
-    setError("Credenciales incorrectas. Regístrate para iniciar sesión.");
+    if (authErrorMsg) {
+      if (authErrorMsg.toLowerCase().includes("email not confirmed")) {
+        setError("El correo electrónico aún no ha sido confirmado. Revisa tu bandeja de entrada o confirma la cuenta en Supabase.");
+      } else if (authErrorMsg.toLowerCase().includes("invalid login credentials")) {
+        setError("Correo o contraseña incorrectos. Verifica tus credenciales.");
+      } else {
+        setError(authErrorMsg);
+      }
+    } else {
+      setError("Credenciales incorrectas. Regístrate para iniciar sesión.");
+    }
     setIsLoading(false);
   };
 
