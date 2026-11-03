@@ -51,7 +51,9 @@ import {
   Search,
   TrendingUp,
   DollarSign,
-  Filter
+  Filter,
+  XCircle,
+  Clock
 } from "lucide-react";
 import { OrderRouteMap } from "../../components/OrderRouteMap";
 
@@ -516,6 +518,9 @@ export default function Dashboard() {
   const [repEmail, setRepEmail] = useState("");
   const [repPhone, setRepPhone] = useState("");
   const [repPassword, setRepPassword] = useState("");
+  const [repStatus, setRepStatus] = useState<string>("Confirmado");
+  const [brokerDriverSearch, setBrokerDriverSearch] = useState("");
+  const [brokerDriverStatusFilter, setBrokerDriverStatusFilter] = useState("all");
   const [showRepPassword, setShowRepPassword] = useState(false);
   const [repBrokerId, setRepBrokerId] = useState("");
   const [repDriverPhotos, setRepDriverPhotos] = useState<string[]>([]);
@@ -3168,6 +3173,7 @@ export default function Dashboard() {
     setRepPhone("");
     setRepPassword("");
     setShowRepPassword(false);
+    setRepStatus("Confirmado");
     setRepBrokerId(defaultBrokerId || "");
     setRepDriverPhotos([]);
     setRepVehiclePhotos([]);
@@ -3187,6 +3193,7 @@ export default function Dashboard() {
     setRepPhone(rep.phone || "");
     setRepPassword("");
     setShowRepPassword(false);
+    setRepStatus(rep.status || "Confirmado");
     setRepBrokerId(rep.broker_id || "");
     
     // Existing URLs
@@ -3332,6 +3339,7 @@ export default function Dashboard() {
         email: repEmail.trim().toLowerCase(),
         phone: repPhone.trim() || null,
         broker_id: repBrokerId && repBrokerId.trim() ? repBrokerId.trim() : null,
+        status: repStatus || "Confirmado",
         driver_photos: finalDriverPhotos,
         vehicle_photos: finalVehiclePhotos,
         reviews: editingRepartidor?.reviews || []
@@ -3494,6 +3502,55 @@ export default function Dashboard() {
     } catch (err: any) {
       console.error("Error saving repartidor:", err);
       setRepError(err.message || "Error al guardar el repartidor.");
+    } finally {
+      setRepIsLoading(false);
+    }
+  };
+
+  const handleToggleRepartidorStatus = async (id: string, name: string, currentStatus: string | null) => {
+    const isApproved = (currentStatus || "").toLowerCase() === "confirmado" || (currentStatus || "").toLowerCase() === "activo" || (currentStatus || "").toLowerCase() === "aprobado";
+    const nextStatus = isApproved ? "Inactivo" : "Confirmado";
+    const actionLabel = isApproved ? "desactivar" : "aprobar y activar";
+
+    const confirm = window.confirm(
+      `¿Estás seguro de que deseas ${actionLabel} al repartidor "${name || 'este conductor'}"?\n\nNuevo estado: ${nextStatus}`
+    );
+    if (!confirm) return;
+
+    setRepIsLoading(true);
+    try {
+      // 1. Update in table 'repartidores'
+      const { error: repErr } = await supabase
+        .from("repartidores")
+        .update({ status: nextStatus })
+        .eq("id_repartidor", id);
+
+      if (repErr) throw repErr;
+
+      // 2. Update local state immediately
+      setSaDriversList(prev => prev.map(d => {
+        if ((d.id_repartidor || d.id) === id) {
+          return { ...d, status: nextStatus };
+        }
+        return d;
+      }));
+
+      // 3. Update local storage fallback if present
+      try {
+        const localUsers = JSON.parse(localStorage.getItem("reparto_local_users") || "[]");
+        const idx = localUsers.findIndex((u: any) => u.IDUser === id);
+        if (idx !== -1) {
+          localUsers[idx].status = nextStatus === "Confirmado" ? "active" : "suspended";
+          localStorage.setItem("reparto_local_users", JSON.stringify(localUsers));
+        }
+      } catch (lErr) {
+        console.warn("Local storage update note:", lErr);
+      }
+
+      await fetchSaEarningsData();
+    } catch (err: any) {
+      console.error("Error updating repartidor status:", err);
+      alert("Error al actualizar el estado del repartidor: " + (err.message || "Inténtalo de nuevo."));
     } finally {
       setRepIsLoading(false);
     }
@@ -10796,20 +10853,56 @@ export default function Dashboard() {
               (currentUserName && b.name?.toLowerCase() === currentUserName.toLowerCase())
             ) || brokersList[0];
 
-            const myDrivers = saDriversList.filter(d => 
+            const myDriversAll = saDriversList.filter(d => 
               (loggedBroker?.id && String(d.broker_id) === String(loggedBroker.id)) ||
               (!d.broker_id && brokersList.length === 1)
             );
 
+            // Filter by search and status
+            const myDrivers = myDriversAll.filter(d => {
+              const search = brokerDriverSearch.trim().toLowerCase();
+              if (search) {
+                const matchName = String(d.name || "").toLowerCase().includes(search);
+                const matchEmail = String(d.email || d.mail || "").toLowerCase().includes(search);
+                const matchPhone = String(d.phone || "").toLowerCase().includes(search);
+                const matchId = String(d.id_repartidor || d.id || "").toLowerCase().includes(search);
+                if (!matchName && !matchEmail && !matchPhone && !matchId) return false;
+              }
+
+              if (brokerDriverStatusFilter !== "all") {
+                const rawSt = (d.status || "").toLowerCase();
+                const isConfirmed = rawSt === "confirmado" || rawSt === "activo" || rawSt === "aprobado";
+                const isPending = rawSt === "pendiente" || !d.status;
+                const isInactive = rawSt === "inactivo" || rawSt === "suspendido" || rawSt === "rechazado";
+
+                if (brokerDriverStatusFilter === "confirmed" && !isConfirmed) return false;
+                if (brokerDriverStatusFilter === "pending" && !isPending) return false;
+                if (brokerDriverStatusFilter === "inactive" && !isInactive) return false;
+              }
+
+              return true;
+            });
+
+            const pendingCount = myDriversAll.filter(d => {
+              const s = (d.status || "").toLowerCase();
+              return s === "pendiente" || !d.status;
+            }).length;
+
+            const confirmedCount = myDriversAll.filter(d => {
+              const s = (d.status || "").toLowerCase();
+              return s === "confirmado" || s === "activo" || s === "aprobado";
+            }).length;
+
             return (
               <div style={{ display: "flex", flexDirection: "column", gap: "24px" }}>
+                {/* Header */}
                 <div className="glass-panel" style={{ padding: "18px 24px", borderRadius: "var(--radius-lg)", display: "flex", flexWrap: "wrap", alignItems: "center", justifyContent: "space-between", gap: "16px" }}>
                   <div>
                     <h2 style={{ fontSize: "1.25rem", fontWeight: 700, margin: 0, color: "var(--text-primary)", display: "flex", alignItems: "center", gap: "8px" }}>
-                      <Truck size={22} style={{ color: "var(--primary)" }} /> Gestión de Repartidores de la Red
+                      <Truck size={22} style={{ color: "var(--primary)" }} /> Gestión y Aprobación de Repartidores
                     </h2>
                     <p style={{ margin: "4px 0 0", fontSize: "0.85rem", color: "var(--text-secondary)" }}>
-                      Conductores y repartidores registrados bajo la supervisión de tu cuenta de Broker.
+                      Supervisión, aprobación de cuentas registradas desde la app y control de activación de conductores.
                     </p>
                   </div>
                   <div style={{ display: "flex", gap: "10px", alignItems: "center" }}>
@@ -10852,6 +10945,78 @@ export default function Dashboard() {
                   </div>
                 </div>
 
+                {/* Filter and KPI stats bar */}
+                <div className="glass-panel" style={{ padding: "16px 20px", borderRadius: "var(--radius-lg)", display: "flex", flexWrap: "wrap", alignItems: "center", justifyContent: "space-between", gap: "14px" }}>
+                  <div style={{ display: "flex", flex: 1, minWidth: "260px", maxWidth: "420px", position: "relative" }}>
+                    <Search size={16} style={{ position: "absolute", left: "12px", top: "50%", transform: "translateY(-50%)", color: "var(--text-muted)" }} />
+                    <input
+                      type="text"
+                      placeholder="Buscar por nombre, correo, teléfono o ID..."
+                      value={brokerDriverSearch}
+                      onChange={e => setBrokerDriverSearch(e.target.value)}
+                      style={{
+                        width: "100%",
+                        padding: "8px 12px 8px 36px",
+                        borderRadius: "var(--radius-md)",
+                        border: "1px solid var(--border-color)",
+                        background: "var(--bg-primary)",
+                        color: "var(--text-primary)",
+                        fontSize: "0.82rem",
+                        outline: "none"
+                      }}
+                    />
+                  </div>
+
+                  <div style={{ display: "flex", gap: "10px", alignItems: "center", flexWrap: "wrap" }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+                      <Filter size={15} style={{ color: "var(--text-muted)" }} />
+                      <select
+                        value={brokerDriverStatusFilter}
+                        onChange={e => setBrokerDriverStatusFilter(e.target.value)}
+                        style={{
+                          padding: "8px 12px",
+                          borderRadius: "var(--radius-md)",
+                          border: "1px solid var(--border-color)",
+                          background: "var(--bg-primary)",
+                          color: "var(--text-primary)",
+                          fontSize: "0.82rem",
+                          fontWeight: 500,
+                          cursor: "pointer",
+                          outline: "none"
+                        }}
+                      >
+                        <option value="all">Todos los Estados ({myDriversAll.length})</option>
+                        <option value="pending">⏳ Pendientes de Aprobación ({pendingCount})</option>
+                        <option value="confirmed">✓ Confirmados / Activos ({confirmedCount})</option>
+                        <option value="inactive">✕ Inactivos / Pausados ({myDriversAll.length - pendingCount - confirmedCount})</option>
+                      </select>
+                    </div>
+
+                    {(brokerDriverSearch || brokerDriverStatusFilter !== "all") && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setBrokerDriverSearch("");
+                          setBrokerDriverStatusFilter("all");
+                        }}
+                        style={{
+                          padding: "8px 12px",
+                          background: "rgba(0, 0, 0, 0.04)",
+                          border: "1px solid var(--border-color)",
+                          borderRadius: "var(--radius-md)",
+                          color: "var(--text-muted)",
+                          fontSize: "0.8rem",
+                          fontWeight: 500,
+                          cursor: "pointer"
+                        }}
+                      >
+                        Limpiar Filtros
+                      </button>
+                    )}
+                  </div>
+                </div>
+
+                {/* Table */}
                 <div className={`glass-panel ${styles.tableCard}`} style={{ padding: "20px", borderRadius: "var(--radius-lg)" }}>
                   <div className={styles.tableWrapper}>
                     <table className={styles.table}>
@@ -10860,9 +11025,9 @@ export default function Dashboard() {
                           <th>Repartidor</th>
                           <th>Contacto</th>
                           <th>Teléfono</th>
-                          <th>Fotos</th>
-                          <th>Entregas Realizadas</th>
-                          <th>Estado Operativo</th>
+                          <th>Documentos / Fotos</th>
+                          <th>Entregas</th>
+                          <th>Estatus / Aprobación</th>
                           <th style={{ textAlign: "right" }}>Acciones</th>
                         </tr>
                       </thead>
@@ -10873,7 +11038,14 @@ export default function Dashboard() {
                           );
                           const driverPhotosCount = Array.isArray(d.driver_photos) ? d.driver_photos.length : 0;
                           const vehiclePhotosCount = Array.isArray(d.vehicle_photos) ? d.vehicle_photos.length : 0;
-                          const totalPhotos = driverPhotosCount + vehiclePhotosCount;
+                          const inePhotosCount = Array.isArray(d.ine_photos) ? d.ine_photos.length : (d.ine_photos ? 1 : 0);
+                          const totalPhotos = driverPhotosCount + vehiclePhotosCount + inePhotosCount;
+
+                          // Parse status
+                          const rawStatus = (d.status || "").toLowerCase();
+                          const isConfirmed = rawStatus === "confirmado" || rawStatus === "activo" || rawStatus === "aprobado";
+                          const isPending = rawStatus === "pendiente" || !d.status;
+                          const isInactive = rawStatus === "inactivo" || rawStatus === "suspendido" || rawStatus === "rechazado";
 
                           return (
                             <tr key={d.id_repartidor || d.id}>
@@ -10893,20 +11065,20 @@ export default function Dashboard() {
                                         cursor: "pointer",
                                         flexShrink: 0
                                       }}
-                                      title="Clic para ver galería"
+                                      title="Clic para ver fotos"
                                     />
                                   ) : (
                                     <div style={{
                                       width: "38px",
                                       height: "38px",
                                       borderRadius: "50%",
-                                      background: "rgba(0, 0, 0, 0.05)",
+                                      background: isConfirmed ? "rgba(16, 185, 129, 0.1)" : isPending ? "rgba(245, 158, 11, 0.1)" : "rgba(239, 68, 68, 0.1)",
                                       border: "1px solid var(--border-color)",
                                       display: "flex",
                                       alignItems: "center",
                                       justifyContent: "center",
                                       fontWeight: 700,
-                                      color: "var(--text-primary)",
+                                      color: isConfirmed ? "#10b981" : isPending ? "#d97706" : "#ef4444",
                                       fontSize: "0.85rem",
                                       flexShrink: 0
                                     }}>
@@ -10927,7 +11099,7 @@ export default function Dashboard() {
                                 <button
                                   type="button"
                                   onClick={() => setViewingRepartidorGallery(d)}
-                                  title="Ver fotos del repartidor y su vehículo"
+                                  title="Ver fotos de perfil, vehículo e INE"
                                   style={{
                                     display: "inline-flex",
                                     alignItems: "center",
@@ -10943,35 +11115,116 @@ export default function Dashboard() {
                                   }}
                                 >
                                   <ImageIcon size={13} />
-                                  <span>{totalPhotos} {totalPhotos === 1 ? "foto" : "fotos"}</span>
+                                  <span>{totalPhotos} {totalPhotos === 1 ? "archivo" : "archivos"}</span>
                                 </button>
                               </td>
                               <td style={{ fontWeight: 600 }}>{dDeliveries.length} entregas</td>
                               <td>
-                                <span style={{
-                                  fontSize: "0.72rem",
-                                  padding: "3px 8px",
-                                  borderRadius: "10px",
-                                  fontWeight: 600,
-                                  background: "rgba(16, 185, 129, 0.12)",
-                                  color: "#10b981"
-                                }}>
-                                  Activo en Red
-                                </span>
+                                {isConfirmed ? (
+                                  <span style={{
+                                    fontSize: "0.74rem",
+                                    padding: "4px 10px",
+                                    borderRadius: "12px",
+                                    fontWeight: 700,
+                                    background: "rgba(16, 185, 129, 0.12)",
+                                    color: "#059669",
+                                    display: "inline-flex",
+                                    alignItems: "center",
+                                    gap: "4px",
+                                    border: "1px solid rgba(16, 185, 129, 0.3)"
+                                  }}>
+                                    <CheckCircle size={12} /> Aprobado / Activo
+                                  </span>
+                                ) : isPending ? (
+                                  <span style={{
+                                    fontSize: "0.74rem",
+                                    padding: "4px 10px",
+                                    borderRadius: "12px",
+                                    fontWeight: 700,
+                                    background: "rgba(245, 158, 11, 0.12)",
+                                    color: "#d97706",
+                                    display: "inline-flex",
+                                    alignItems: "center",
+                                    gap: "4px",
+                                    border: "1px solid rgba(245, 158, 11, 0.3)"
+                                  }}>
+                                    <Clock size={12} /> Pendiente de Aprobación
+                                  </span>
+                                ) : (
+                                  <span style={{
+                                    fontSize: "0.74rem",
+                                    padding: "4px 10px",
+                                    borderRadius: "12px",
+                                    fontWeight: 700,
+                                    background: "rgba(239, 68, 68, 0.12)",
+                                    color: "#dc2626",
+                                    display: "inline-flex",
+                                    alignItems: "center",
+                                    gap: "4px",
+                                    border: "1px solid rgba(239, 68, 68, 0.3)"
+                                  }}>
+                                    <XCircle size={12} /> Inactivo / Desactivado
+                                  </span>
+                                )}
                               </td>
                               <td style={{ textAlign: "right" }}>
-                                <div style={{ display: "flex", gap: "6px", justifyContent: "flex-end" }}>
+                                <div style={{ display: "flex", gap: "6px", justifyContent: "flex-end", alignItems: "center" }}>
+                                  {/* Botón de activación / aprobación rápida */}
+                                  {isConfirmed ? (
+                                    <button
+                                      type="button"
+                                      onClick={() => handleToggleRepartidorStatus(d.id_repartidor || d.id, d.name, d.status)}
+                                      title="Desactivar conductor"
+                                      style={{
+                                        padding: "5px 9px",
+                                        background: "rgba(239, 68, 68, 0.08)",
+                                        border: "1px solid rgba(239, 68, 68, 0.25)",
+                                        borderRadius: "var(--radius-sm)",
+                                        color: "#dc2626",
+                                        fontSize: "0.74rem",
+                                        fontWeight: 600,
+                                        cursor: "pointer",
+                                        display: "inline-flex",
+                                        alignItems: "center",
+                                        gap: "4px"
+                                      }}
+                                    >
+                                      <ToggleLeft size={13} /> Desactivar
+                                    </button>
+                                  ) : (
+                                    <button
+                                      type="button"
+                                      onClick={() => handleToggleRepartidorStatus(d.id_repartidor || d.id, d.name, d.status)}
+                                      title="Aprobar y activar conductor"
+                                      style={{
+                                        padding: "5px 9px",
+                                        background: "rgba(16, 185, 129, 0.12)",
+                                        border: "1px solid rgba(16, 185, 129, 0.3)",
+                                        borderRadius: "var(--radius-sm)",
+                                        color: "#059669",
+                                        fontSize: "0.74rem",
+                                        fontWeight: 700,
+                                        cursor: "pointer",
+                                        display: "inline-flex",
+                                        alignItems: "center",
+                                        gap: "4px"
+                                      }}
+                                    >
+                                      <CheckCircle2 size={13} /> Aprobar / Activar
+                                    </button>
+                                  )}
+
                                   <button
                                     type="button"
                                     onClick={() => handleOpenEditRepartidor(d)}
-                                    title="Editar repartidor"
+                                    title="Editar datos del repartidor"
                                     style={{
-                                      padding: "5px 10px",
+                                      padding: "5px 8px",
                                       background: "rgba(0, 0, 0, 0.04)",
                                       border: "1px solid var(--border-color)",
                                       borderRadius: "var(--radius-sm)",
                                       color: "var(--text-primary)",
-                                      fontSize: "0.75rem",
+                                      fontSize: "0.74rem",
                                       fontWeight: 600,
                                       cursor: "pointer",
                                       display: "inline-flex",
@@ -10979,27 +11232,26 @@ export default function Dashboard() {
                                       gap: "4px"
                                     }}
                                   >
-                                    <Edit2 size={12} /> Editar
+                                    <Edit2 size={12} />
                                   </button>
                                   <button
                                     type="button"
                                     onClick={() => handleDeleteRepartidor(d.id_repartidor || d.id, d.name)}
                                     title="Eliminar repartidor"
                                     style={{
-                                      padding: "5px 10px",
+                                      padding: "5px 8px",
                                       background: "rgba(247, 52, 12, 0.08)",
                                       border: "1px solid rgba(247, 52, 12, 0.2)",
                                       borderRadius: "var(--radius-sm)",
                                       color: "var(--primary)",
-                                      fontSize: "0.75rem",
+                                      fontSize: "0.74rem",
                                       fontWeight: 600,
                                       cursor: "pointer",
                                       display: "inline-flex",
-                                      alignItems: "center",
-                                      gap: "4px"
+                                      alignItems: "center"
                                     }}
                                   >
-                                    <Trash2 size={12} /> Eliminar
+                                    <Trash2 size={12} />
                                   </button>
                                 </div>
                               </td>
@@ -11011,10 +11263,12 @@ export default function Dashboard() {
                             <td colSpan={7} style={{ textAlign: "center", padding: "36px 20px", color: "var(--text-muted)" }}>
                               <Truck size={36} style={{ color: "var(--text-muted)", margin: "0 auto 12px", display: "block", opacity: 0.4 }} />
                               <div style={{ fontWeight: 600, color: "var(--text-primary)", marginBottom: "4px" }}>
-                                Aún no tienes repartidores registrados en tu flota.
+                                No se encontraron repartidores con los filtros actuales.
                               </div>
                               <p style={{ margin: "0 0 16px", fontSize: "0.82rem" }}>
-                                Puedes dar de alta conductores con su cuenta autenticada para que empiecen a recibir y entregar pedidos.
+                                {brokerDriverSearch || brokerDriverStatusFilter !== "all"
+                                  ? "Prueba cambiando el estatus o los términos de búsqueda."
+                                  : "Aún no hay repartidores registrados en tu flota."}
                               </p>
                               <button
                                 type="button"
@@ -12335,45 +12589,61 @@ export default function Dashboard() {
                     </div>
                   )}
 
-                  {/* Broker Responsable (broker_id) */}
-                  <div className={styles.formGroup}>
-                    <label className={styles.inputLabel} style={{ fontWeight: 600, color: "var(--text-primary)" }}>
-                      Broker Asignado (broker_id)
-                    </label>
-                    {isBroker && !isSuperAdmin ? (
-                      <div style={{
-                        padding: "10px 12px",
-                        background: "rgba(0, 0, 0, 0.04)",
-                        border: "1px solid var(--border-color)",
-                        borderRadius: "var(--radius-sm)",
-                        fontSize: "0.85rem",
-                        color: "var(--text-primary)",
-                        display: "flex",
-                        alignItems: "center",
-                        gap: "8px"
-                      }}>
-                        <Users size={16} style={{ color: "var(--primary)" }} />
-                        <span style={{ fontWeight: 600 }}>{currentUserName || "Tu cuenta de Broker"}</span>
-                        <span style={{ fontSize: "0.75rem", color: "var(--text-muted)", marginLeft: "auto", fontFamily: "var(--font-mono)" }}>
-                          {repBrokerId ? `ID: ${repBrokerId.slice(0, 8)}...` : "(Asignación automática)"}
-                        </span>
-                      </div>
-                    ) : (
+                  {/* Broker Responsable y Estado / Aprobación */}
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "12px" }}>
+                    <div className={styles.formGroup}>
+                      <label className={styles.inputLabel} style={{ fontWeight: 600, color: "var(--text-primary)" }}>
+                        Broker Asignado
+                      </label>
+                      {isBroker && !isSuperAdmin ? (
+                        <div style={{
+                          padding: "10px 12px",
+                          background: "rgba(0, 0, 0, 0.04)",
+                          border: "1px solid var(--border-color)",
+                          borderRadius: "var(--radius-sm)",
+                          fontSize: "0.82rem",
+                          color: "var(--text-primary)",
+                          display: "flex",
+                          alignItems: "center",
+                          gap: "8px"
+                        }}>
+                          <Users size={15} style={{ color: "var(--primary)" }} />
+                          <span style={{ fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{currentUserName || "Tu cuenta"}</span>
+                        </div>
+                      ) : (
+                        <select
+                          value={repBrokerId}
+                          onChange={(e) => setRepBrokerId(e.target.value)}
+                          className={styles.formInput}
+                          style={{ padding: "10px 12px", fontSize: "0.82rem" }}
+                          disabled={repIsLoading}
+                        >
+                          <option value="">-- Sin Broker (NULL) --</option>
+                          {brokersList.map((b: any) => (
+                            <option key={b.id} value={b.id}>
+                              {b.name || b.email || b.id}
+                            </option>
+                          ))}
+                        </select>
+                      )}
+                    </div>
+
+                    <div className={styles.formGroup}>
+                      <label className={styles.inputLabel} style={{ fontWeight: 600, color: "var(--text-primary)" }}>
+                        Estado de Aprobación (status) *
+                      </label>
                       <select
-                        value={repBrokerId}
-                        onChange={(e) => setRepBrokerId(e.target.value)}
+                        value={repStatus}
+                        onChange={(e) => setRepStatus(e.target.value)}
                         className={styles.formInput}
-                        style={{ padding: "10px 12px" }}
+                        style={{ padding: "10px 12px", fontSize: "0.82rem", fontWeight: 600 }}
                         disabled={repIsLoading}
                       >
-                        <option value="">-- Sin Broker asignado (NULL) --</option>
-                        {brokersList.map((b: any) => (
-                          <option key={b.id} value={b.id}>
-                            {b.name || b.email || b.id} (ID: {String(b.id).slice(0, 8)}...)
-                          </option>
-                        ))}
+                        <option value="Confirmado">✓ Confirmado (Aprobado / Activo)</option>
+                        <option value="Pendiente">⏳ Pendiente (Por Aprobar)</option>
+                        <option value="Inactivo">✕ Inactivo (Desactivado / Pausado)</option>
                       </select>
-                    )}
+                    </div>
                   </div>
 
                   {/* Fotos del Conductor (driver_photos) */}
@@ -12617,6 +12887,32 @@ export default function Dashboard() {
                   ) : (
                     <div style={{ padding: "16px", background: "rgba(0, 0, 0, 0.03)", borderRadius: "var(--radius-sm)", color: "var(--text-muted)", fontSize: "0.82rem", textAlign: "center" }}>
                       No hay fotos del conductor registradas en este perfil.
+                    </div>
+                  )}
+                </div>
+
+                {/* Section 3: Fotos de Identificación / INE */}
+                <div style={{ marginBottom: "24px" }}>
+                  <h4 style={{ margin: "0 0 10px 0", fontSize: "0.95rem", fontWeight: 600, color: "var(--text-primary)" }}>
+                    Identificación Oficial / INE ({Array.isArray(viewingRepartidorGallery.ine_photos) ? viewingRepartidorGallery.ine_photos.length : (viewingRepartidorGallery.ine_photos ? 1 : 0)})
+                  </h4>
+                  {Array.isArray(viewingRepartidorGallery.ine_photos) && viewingRepartidorGallery.ine_photos.length > 0 ? (
+                    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(140px, 1fr))", gap: "12px" }}>
+                      {viewingRepartidorGallery.ine_photos.map((url: string, idx: number) => (
+                        <a key={idx} href={url} target="_blank" rel="noopener noreferrer" style={{ display: "block", borderRadius: "8px", overflow: "hidden", border: "1px solid var(--border-color)", aspectRatio: "1/1", position: "relative" }}>
+                          <img src={url} alt={`INE ${idx}`} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+                        </a>
+                      ))}
+                    </div>
+                  ) : typeof viewingRepartidorGallery.ine_photos === "string" && viewingRepartidorGallery.ine_photos.trim() ? (
+                    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(140px, 1fr))", gap: "12px" }}>
+                      <a href={viewingRepartidorGallery.ine_photos} target="_blank" rel="noopener noreferrer" style={{ display: "block", borderRadius: "8px", overflow: "hidden", border: "1px solid var(--border-color)", aspectRatio: "1/1", position: "relative" }}>
+                        <img src={viewingRepartidorGallery.ine_photos} alt="INE" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+                      </a>
+                    </div>
+                  ) : (
+                    <div style={{ padding: "16px", background: "rgba(0, 0, 0, 0.03)", borderRadius: "var(--radius-sm)", color: "var(--text-muted)", fontSize: "0.82rem", textAlign: "center" }}>
+                      No se han subido fotos del INE o identificación oficial.
                     </div>
                   )}
                 </div>

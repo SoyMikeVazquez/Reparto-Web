@@ -47,10 +47,25 @@
   width: 52px;
   height: 52px;
   border-radius: var(--radius-md);
-  object-fit: cover;
-  border: 2px solid var(--primary-glow);
+  object-fit: contain;
+  background: rgba(255, 255, 255, 0.04);
+  padding: 2px;
+  border: 1px solid var(--border-color);
   box-shadow: 0 4px 12px rgba(247, 52, 12, 0.15);
   transition: all var(--transition-normal);
+}
+
+.platformLogoImg {
+  width: 54px;
+  height: 54px;
+  object-fit: contain;
+  filter: drop-shadow(0 2px 8px rgba(247, 52, 12, 0.25));
+  transition: all var(--transition-normal);
+}
+
+.collapsed .platformLogoImg {
+  width: 36px;
+  height: 36px;
 }
 
 .collapsed .companyLogoImg {

@@ -150,9 +150,11 @@ export const Sidebar: React.FC<SidebarProps> = ({
             onError={() => setLogoError(true)}
           />
         ) : (
-          <div className={styles.logo}>
-            <Shield size={24} />
-          </div>
+          <img 
+            src="/logo oficial.png" 
+            alt="Reparto Logo" 
+            className={styles.platformLogoImg} 
+          />
         )}
         <span className={styles.brandName}>
           {superAdmin ? "Reparto Global" : isBroker ? "Broker Console" : (companyName || "Reparto Control")}

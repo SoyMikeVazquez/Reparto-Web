@@ -618,7 +618,11 @@ export default function Login() {
       }}>
         <div className={styles.header}>
           <div className={styles.logo}>
-            <Shield size={36} />
+            <img 
+              src="/logo oficial.png" 
+              alt="Reparto Logo" 
+              className={styles.logoImg} 
+            />
           </div>
           <h2 className={styles.title}>Reparto Control</h2>
           <p className={styles.subtitle}>
